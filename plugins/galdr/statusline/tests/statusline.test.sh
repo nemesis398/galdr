@@ -178,8 +178,8 @@ expect ""
 
 echo "the quiet hosts"
 
-values '{"statusline":{"quietHosts":["laptop","muninn"]}}'
-for h in laptop muninn; do
+values '{"statusline":{"quietHosts":["laptop","server"]}}'
+for h in laptop server; do
     CASE="every host statusline.quietHosts lists is quiet ($h of two)"
     run_sl "$(fresh)" HOSTNAME=$h GALDR_CONFIG="$ROOT/v.json"
     expect "$BODY"
