@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "lead",
+  "version": "0.1.0",
+  "description": "Run a plan as a lead with subagents: four task categories (scout, edit, build, review) on one ladder of model and effort, fresh workers with fix lists, and climbing one rung per failure.",
+  "author": {
+    "name": "nemesis398",
+    "url": "https://github.com/nemesis398"
+  },
+  "homepage": "https://github.com/nemesis398/galdr",
+  "repository": "https://github.com/nemesis398/galdr",
+  "license": "MIT",
+  "keywords": ["subagents", "orchestration", "delegation", "model-selection", "effort"]
+}
