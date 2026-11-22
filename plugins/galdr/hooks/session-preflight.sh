@@ -205,9 +205,10 @@ check_netbird() {
     fi
 
     # The output goes to a file and the hook waits for timeout alone: a pipe
-    # waits for every process netbird started, and on GitHub's runner a child
-    # that ignores SIGTERM outlived timeout and held one open for 30 s.
-    # Whatever is left in timeout's process group is killed afterwards.
+    # waits for every process netbird started, and uutils timeout (Ubuntu
+    # 26.04) sends its SIGKILL to netbird alone, so a child that ignores
+    # SIGTERM held one open for 30 s. What is left of timeout's process group
+    # is killed afterwards.
     # 124 is SIGTERM after 3 s, 137 the SIGKILL a second later.
     local tmp pid
     if ! tmp=$(mktemp 2>/dev/null); then

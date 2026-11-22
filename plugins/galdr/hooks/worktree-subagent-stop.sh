@@ -86,9 +86,15 @@ teardown() {
         printf 'worktree-subagent-stop: %s is not an executable file, not running it\n' "$td" >&2
         return 0
     fi
+    # In the background so the hook knows timeout's pid, which is also its
+    # process group: uutils timeout (Ubuntu 26.04) sends its SIGKILL to the
+    # teardown alone, so what is left of the group is killed here.
     (cd -- "$wt" && exec timeout -k 5 "$teardown_limit" env WORKTREE_MAIN="$main" \
-        WORKTREE_PATH="$wt" WORKTREE_NAME="${name//+//}" "$td") </dev/null
+        WORKTREE_PATH="$wt" WORKTREE_NAME="${name//+//}" "$td") </dev/null &
+    local pid=$!
+    wait "$pid" 2>/dev/null # no "Killed" job notice on the hook's stderr
     rc=$?
+    kill -KILL -- "-$pid" 2>/dev/null
     if ((rc == 0)); then
         td_note="teardown ran"
         return 0
