@@ -1,0 +1,68 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "galdr",
+  "owner": {
+    "name": "nemesis398",
+    "url": "https://github.com/nemesis398"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for working in a repository: the galdr hooks and the lead workflow, with the skills they use."
+  },
+  "plugins": [
+    {
+      "name": "galdr",
+      "source": "./plugins/galdr",
+      "description": "Session hooks and a status line: web search routing, temporary-file pruning, session preflight and worktree guards."
+    },
+    {
+      "name": "lead",
+      "source": "./plugins/lead",
+      "description": "The lead workflow: a model ladder, task categories and the four category agents."
+    },
+    {
+      "name": "prose",
+      "source": {"source": "github", "repo": "nemesis398/prose", "ref": "v0.1.1"},
+      "description": "Prose in German and English without em dashes or machine rhythm, with a checker."
+    },
+    {
+      "name": "conventional-commits",
+      "source": {"source": "github", "repo": "nemesis398/conventional-commits", "ref": "v0.1.0"},
+      "description": "Commit messages in Conventional Commits 1.0.0, shaped by the repository's own history."
+    },
+    {
+      "name": "handoff",
+      "source": {"source": "github", "repo": "nemesis398/handoff", "ref": "v0.1.0"},
+      "description": "Session handoffs: the goal as a parent work item, the next steps as sub-items, the state as one comment."
+    },
+    {
+      "name": "journal",
+      "source": {"source": "github", "repo": "nemesis398/journal", "ref": "v0.1.0"},
+      "description": "Session notes: the noteworthy work of a session, under fixed sections."
+    },
+    {
+      "name": "ai-memory",
+      "source": {"source": "github", "repo": "nemesis398/ai-memory", "ref": "v0.1.0"},
+      "description": "Memory notes: one fact per note, with a flat format that retrieval can inject."
+    },
+    {
+      "name": "simplify-changes",
+      "source": {"source": "github", "repo": "nemesis398/simplify-changes", "ref": "v0.1.0"},
+      "description": "A behavior-preserving simplification pass that never deletes error handling."
+    },
+    {
+      "name": "conscience",
+      "source": {"source": "github", "repo": "nemesis398/conscience", "ref": "v0.1.0"},
+      "description": "A sparring conscience for abstractions, dependencies and data-layout decisions."
+    },
+    {
+      "name": "obsidian",
+      "source": {
+        "source": "git-subdir",
+        "url": "obsidianmd/obsidian-skills",
+        "path": "plugins/obsidian",
+        "sha": "b110b2f8e9eb1f287892f937050dfd40af862cbb"
+      },
+      "description": "Obsidian skills from the upstream obsidian-skills marketplace, pinned by commit."
+    }
+  ]
+}
