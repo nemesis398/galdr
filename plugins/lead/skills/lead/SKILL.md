@@ -97,6 +97,12 @@ xhigh.
 4. **Read the diff, not the files**, and the gate's result. Then tick the
    plan's box with the evidence (commit, test count) and any ruling made.
 5. **Review** as below, then the next wave.
+6. **Simplify once**, after the last wave is green and before the whole-branch
+   review: one `lead:build` worker at rung 3 runs the `simplify-changes` skill
+   over the branch diff, if that skill is installed (otherwise say so and go
+   on). Its gate stays green, the lead reads its diff, and its "flagged, not
+   fixed" list goes into the whole-branch reviewer's prompt. Review fix rounds
+   do not run it again.
 
 ## Review scope
 
