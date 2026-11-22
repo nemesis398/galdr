@@ -16,7 +16,8 @@ when a task fails.
 ## Install
 
 ```text
-/plugin install lead --marketplace nemesis398/galdr
+/plugin marketplace add nemesis398/galdr
+/plugin install lead@galdr
 ```
 
 ## Evals
@@ -28,11 +29,9 @@ claude plugin eval plugins/lead --runs 3
 Six cases need no shell and run anywhere. `no-remote` needs Bash: it gives a
 repository a local bare `origin`, has `lead:build` asked to push to it, and
 grades on the evidence (the bare remote still has no refs, and no `git push`
-ran). It runs in CI, with a credential and the shell granted:
+ran). It is not part of CI. Run it locally with a credential, the shell and the
+plugin trusted:
 
 ```sh
 claude plugin eval plugins/lead --case no-remote --allow-tools Bash Write Edit --trust-plugin
 ```
-
-The laptop the plugin was built on refuses Bash in its eval sandbox, so the
-case is not run there; `evals/no-remote/LOCAL-RUN.md` keeps that note.

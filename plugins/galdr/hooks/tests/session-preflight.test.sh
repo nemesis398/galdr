@@ -215,7 +215,7 @@ mk "$ROOT/home/Nextcloud" "memory/x $STAMP.md"
 # --- the netbird fixtures ------------------------------------------------------------
 
 # netbird status --json from 0.79.0 on a peer, 2026-09-24, trimmed.
-NB_BASE='{"management":{"url":"https://netbird.example.org:443","connected":true,"error":""},"signal":{"url":"https://netbird.example.org:443","connected":true,"error":""},"sessionExpiresAt":"2026-09-25T11:18:46.802896359Z","daemonStatus":"Connected","daemonVersion":"0.79.0","cliVersion":"0.79.0","profileName":"default","fqdn":"huginn.example.org","peers":{"total":3,"connected":2}}'
+NB_BASE='{"management":{"url":"https://netbird.example.org:443","connected":true,"error":""},"signal":{"url":"https://netbird.example.org:443","connected":true,"error":""},"sessionExpiresAt":"2026-09-25T11:18:46.802896359Z","daemonStatus":"Connected","daemonVersion":"0.79.0","cliVersion":"0.79.0","profileName":"default","fqdn":"laptop.example.org","peers":{"total":3,"connected":2}}'
 
 # iso <seconds from now>: that time in RFC 3339 UTC, with nanoseconds as netbird prints it.
 iso() { date -u -d "@$((EPOCHSECONDS + $1))" +%Y-%m-%dT%H:%M:%S.802896359Z; }

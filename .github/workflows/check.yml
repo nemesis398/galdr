@@ -4,6 +4,7 @@ name: check
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -31,6 +32,9 @@ jobs:
       - name: ShellCheck the scripts
         run: |
           find . -path ./.git -prune -o -name '*.sh' -print0 | xargs -0 -r shellcheck
+      # The prune test needs unprivileged user namespaces, which Ubuntu 24.04 restricts.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Run the hook tests
         run: |
           for t in plugins/*/*/tests/*.test.sh; do

@@ -142,7 +142,8 @@ step, and its prompt and report cost lead tokens too. Do it yourself when:
 
 In a repository with `.dvergr.json`, a build task at rung 3 or 4 goes to a
 dvergr worker with role `code`, and a hard task with role `hard`, unless it is
-security-relevant. Load the `dvergr` skill; it decides the rest.
+security-relevant. dvergr is a skill that routes implementer steps, if one is
+installed (for example dvergr); it decides the rest.
 
 ## What stays from test-driven plans
 

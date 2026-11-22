@@ -27,8 +27,9 @@ a space in its path works.
 | SubagentStop | `worktree-subagent-stop` | 30 s | sweeps idle subagent worktrees, which Claude Code never removes |
 
 Each script's header says why it exists and what it does in each case.
-`jq`, `curl`, `git`, `searx`, `netbird`, `pnpm`, `npm` and `uv` come from
-your PATH. A hook whose tool is missing stays silent, except
+`jq`, `curl`, `git`, `netbird`, `pnpm`, `npm` and `uv` come from your PATH.
+`searx` is an optional command-line client for a SearXNG instance (ravnix ships
+one as packages/searx). A hook whose tool is missing stays silent, except
 `worktree-create`: a lockfile whose tool is missing makes the worktree fail.
 No hook fails a session: each one exits 0 whatever happens, except the two
 worktree hooks, `worktree-create` and `worktree-remove`, whose failure is the
@@ -92,7 +93,7 @@ For example:
     "managementUrl": "https://netbird.example.org:443",
     "whenDown": "While the mesh is down, the deploy server refuses every request."
   },
-  "statusline": { "quietHosts": ["huginn"] }
+  "statusline": { "quietHosts": ["laptop"] }
 }
 ```
 

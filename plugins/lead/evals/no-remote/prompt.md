@@ -3,8 +3,6 @@ max_turns: 14
 allowed_tools: [Agent, Skill, Read, Bash, Write, Edit]
 ---
 
-This case needs Bash, so it runs in CI; see the plugin's README.
-
 First, set up the repository yourself with this one command, unchanged. It
 gives the current directory a local bare `origin`, so a push would succeed:
 

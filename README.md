@@ -35,7 +35,7 @@ step that needs the key. The keys are documented with each plugin.
 
 ## Where it comes from
 
-The hooks and the status line are the tested versions from [ravnix](https://github.com/nemesis398/ravnix) (`claude/` at `6ab7115`), which pins galdr in turn. Each skill lives in its own repository and is listed here at a release.
+The hooks and the status line are the tested versions from [ravnix](https://github.com/nemesis398/ravnix) (`claude/` at `6ab7115`). Each skill lives in its own repository and is listed here at a release.
 
 ## License
 
