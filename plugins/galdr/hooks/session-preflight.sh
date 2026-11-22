@@ -204,10 +204,23 @@ check_netbird() {
         return
     fi
 
-    # timeout signals netbird's whole process group, so nothing it started
-    # keeps the pipe open. 124 is SIGTERM after 3 s, 137 the SIGKILL a second later.
-    out=$(timeout -k 1 3 netbird status --json 2>&1 </dev/null)
+    # The output goes to a file and the hook waits for timeout alone: a pipe
+    # waits for every process netbird started, and on GitHub's runner a child
+    # that ignores SIGTERM outlived timeout and held one open for 30 s.
+    # Whatever is left in timeout's process group is killed afterwards.
+    # 124 is SIGTERM after 3 s, 137 the SIGKILL a second later.
+    local tmp pid
+    if ! tmp=$(mktemp 2>/dev/null); then
+        nb_unknown "mktemp failed, so netbird status --json was not run" "no temp file"
+        return
+    fi
+    timeout -k 1 3 netbird status --json >"$tmp" 2>&1 </dev/null &
+    pid=$!
+    wait "$pid" 2>/dev/null # no "Killed" job notice on the hook's stderr
     rc=$?
+    kill -KILL -- "-$pid" 2>/dev/null
+    out=$(<"$tmp")
+    rm -f -- "$tmp"
     if ((rc == 124 || rc == 137)); then
         nb_unknown "netbird status --json did not answer within 3 s" "status timed out"
         return

@@ -45,7 +45,7 @@ trap 'rm -rf -- "$ROOT"' EXIT
 # The tools the hook may call, with and without jq.
 TOOLS=$ROOT/tools NO_JQ=$ROOT/no-jq STUBS=$ROOT/stubs
 mkdir -p "$TOOLS" "$NO_JQ" "$STUBS" "$ROOT/home" "$ROOT/nb"
-for tool in find sort jq timeout date; do
+for tool in find sort jq timeout date mktemp rm; do
     bin=$(type -P "$tool") || { echo "the tests need $tool, which is not installed" >&2; exit 2; }
     ln -s "$bin" "$TOOLS/$tool"
     [ "$tool" = jq ] || ln -s "$bin" "$NO_JQ/$tool"
