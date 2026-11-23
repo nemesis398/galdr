@@ -6,7 +6,7 @@
 #   line 1: <model> <effort> · ctx <n>% · 5h <n>% ↻<HH:MM> · wk <n>% ↻<Mo> ·
 #           <Model> <n>% ... · cache <n>m · credits <used>/<limit> €
 #   line 2: [<host> · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] ·
-#           plan <name> <n>%|✓
+#           plan <name> <n>%|✓ · 🔑 <label> ✓|✗ ...
 # The project is workspace.project_dir with $HOME as ~ (whole components
 # only). ↳ shows the current directory relative to it when below it, in
 # full when outside it. The branch comes from .git/HEAD, or from the gitdir:
@@ -24,6 +24,17 @@
 # whole number prints as a percentage, anything else prints the name alone.
 # The name is the file's without .md and without a leading YYYY-MM-DD-. A
 # plan that is gone, or has no frontmatter that closes, prints no part.
+#
+# The key shows whether each SSH master in statusline.sshHosts (label to
+# host) still holds: ✓ when the control socket is there, ✗ in yellow when
+# not. ssh-sockets.sh (a SessionStart hook) asks ssh for each socket's path
+# and caches the lines <label>\t<path> in
+# ${XDG_STATE_HOME:-~/.local/state}/galdr/ssh-sockets. A label prints only
+# when it is both in the config and in the cache, in config order, so a
+# cache left by an old config or another machine shows nothing that is no
+# longer asked for. The labels come from jq, which drops an empty one, one
+# with a control character, and one whose host is no string or starts with
+# -, as the hook does. No cache yet, no part.
 #
 # Why: the line answers "can I keep going, and what does the next turn cost"
 # without opening /usage. The limits and the cache age are what otherwise
@@ -72,7 +83,8 @@
 #     compaction) is what the next turn rewrites. The age moves only when the
 #     script runs again, which is after a message, at expires_at, and every
 #     refreshInterval seconds if the statusLine setting has one;
-#   - workspace.project_dir, workspace.current_dir and session_id for line 2.
+#   - workspace.project_dir, workspace.current_dir and session_id for line 2,
+#     followed by one field per label of statusline.sshHosts.
 # Per-model weekly windows (rate_limits.model_scoped[] by display_name, then
 # seven_day_opus and seven_day_sonnet, each {utilization, resets_at}) and
 # extra_usage (amounts in minor units of its currency) are the shapes of the
@@ -165,6 +177,12 @@ def scoped:
         | (.seven_day_opus? | objects | {n: "Opus", o: .}),
           (.seven_day_sonnet? | objects | {n: "Sonnet", o: .}))
     | select(.n != "" and (.o | used) != null);
+def ssh_labels:
+    ($values | try fromjson catch null)
+    | objects | .statusline? | objects | .sshHosts? | objects | to_entries[]
+    | select((.key | test("^[^[:cntrl:]]+$"))
+        and (.value | type) == "string" and (.value | test("^[^-[:cntrl:]][^[:cntrl:]]*$")))
+    | .key;
 def body:
 [ (text(.model?.display_name) as $m | text(.effort?.level) as $e
        | if $m != "" and $e != "" then "\($m) \($e)" else $m end),
@@ -182,16 +200,18 @@ def body:
    ($in | body),
    ($in | text(.workspace?.project_dir)),
    ($in | text(.workspace?.current_dir)),
-   ($in | text(.session_id) | gsub("[^A-Za-z0-9-]"; ""))]
+   ($in | text(.session_id) | gsub("[^A-Za-z0-9-]"; "")),
+   ssh_labels]
 | map("_" + .) | join("\t")'
 # Every field leads with _, which is stripped below: read splits on a tab as
 # on white space, so an empty field would otherwise swallow its neighbour.
 fields=()
 IFS=$'\t' read -r -a fields <<<"$(jq -nr --arg c "$color_on" --arg host "$host" \
     --rawfile values "$values" "$prog" 2>/dev/null)"
-for i in 0 1 2 3 4; do fields[i]=${fields[i]#_}; done
+for i in "${!fields[@]}"; do fields[i]=${fields[i]#_}; done
 quiet=${fields[0]} line1=${fields[1]} project_dir=${fields[2]}
 current_dir=${fields[3]} session_id=${fields[4]}
+ssh_labels=("${fields[@]:5}")
 
 # short_path <abs>: the path with $HOME as ~, on a whole component only, so
 # /home/user2 is not ~2 under HOME=/home/user.
@@ -284,6 +304,23 @@ fi
 if [[ -n $session_id ]]; then
     plan_of "${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/galdr/plan/$session_id"
     [[ -n $plan ]] && parts+=("$plan")
+fi
+if ((${#ssh_labels[@]})); then
+    keys="" c_labels=() c_paths=()
+    while IFS=$'\t' read -r l p || [[ -n $l ]]; do
+        c_labels+=("$l") c_paths+=("$p")
+    done 2>/dev/null <"${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/galdr/ssh-sockets"
+    for l in "${ssh_labels[@]}"; do
+        for i in "${!c_labels[@]}"; do
+            [[ ${c_labels[i]} == "$l" ]] || continue
+            p=${c_paths[i]}
+            if [[ $p == /* && -S $p ]]; then keys+=" $l ✓"
+            elif [[ -n $color_on ]]; then keys+=" $l "$'\e[33m✗\e[0m'
+            else keys+=" $l ✗"; fi
+            break
+        done
+    done
+    [[ -n $keys ]] && parts+=("🔑$keys")
 fi
 
 line2=""

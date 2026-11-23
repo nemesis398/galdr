@@ -1,11 +1,12 @@
 {
-  "description": "galdr: prune dead Claude temp folders, a session preflight, WebSearch routed to SearXNG, the plan a session edits tracked for the status line, and provisioned git worktrees",
+  "description": "galdr: prune dead Claude temp folders, a session preflight, WebSearch routed to SearXNG, the plan a session edits and the SSH master sockets tracked for the status line, and provisioned git worktrees",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/prune-claude-tmp.sh\"", "timeout": 30 },
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-preflight.sh\"", "timeout": 10 }
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-preflight.sh\"", "timeout": 10 },
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ssh-sockets.sh\"", "timeout": 10 }
         ]
       }
     ],

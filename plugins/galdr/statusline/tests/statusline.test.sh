@@ -757,6 +757,101 @@ run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME=
 expect "$BODY"$'\n'"~/proj · main · plan a[2Jb 1%"
 rm -f -- "$PSTATE/$P_SID_FULL"
 
+# --- the SSH masters -------------------------------------------------------------
+
+echo "the SSH masters"
+
+# ssh-sockets.sh (a SessionStart hook) caches each label's control socket
+# path in $XDG_STATE_HOME/galdr/ssh-sockets, one <label>\t<path> line each.
+# The script prints a label only when it is both in statusline.sshHosts and
+# in the cache. sockets <line>...: writes those lines as the cache.
+SSTATE=$ROOT/state/galdr
+mkdir -p "$SSTATE"
+sockets() { printf '%s\n' "$@" >"$SSTATE/ssh-sockets"; }
+PYTHON_BIN=$(type -P python3) || { echo "the tests need python3, which is not installed" >&2; exit 2; }
+# A real socket, kept short: a socket path has a length limit.
+SOCK=$ROOT/s NOSOCK=$ROOT/nos
+"$PYTHON_BIN" -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$SOCK"
+: >"$ROOT/plain"
+SSHV='{"statusline":{"quietHosts":["laptop"],"sshHosts":{"forgejo":"git.example.org","github":"github.com"}}}'
+NOK="${YELLOW}✗${RESET}"
+sl_ssh() { run_sl "$1" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state" GALDR_CONFIG="$ROOT/v.json" "${@:2}"; }
+
+CASE="socket up: a socket at the cached path gives ✓, a label not cached gives no entry"
+values "$SSHV"
+sockets "forgejo"$'\t'"$SOCK"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main · 🔑 forgejo ✓"
+
+CASE="socket missing: nothing at the cached path gives ✗ in yellow"
+sockets "forgejo"$'\t'"$SOCK" "github"$'\t'"$NOSOCK"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main · 🔑 forgejo ✓ github $NOK"
+
+CASE="a plain file at the cached path is no socket: ✗"
+sockets "forgejo"$'\t'"$ROOT/plain"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main · 🔑 forgejo $NOK"
+
+CASE="a relative path in the cache is no socket: ✗"
+sockets "forgejo"$'\t'"s"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main · 🔑 forgejo $NOK"
+
+CASE="NO_COLOR gives a plain ✗"
+sockets "forgejo"$'\t'"$SOCK" "github"$'\t'"$NOSOCK"
+sl_ssh "$(placed "$H/proj" "$H/proj")" NO_COLOR=1
+expect "$BODY"$'\n'"~/proj · main · 🔑 forgejo ✓ github ✗"
+
+CASE="the order is the config's, not the cache's"
+sockets "github"$'\t'"$NOSOCK" "forgejo"$'\t'"$SOCK"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main · 🔑 forgejo ✓ github $NOK"
+
+CASE="label not in config: a cached label from an old config is not shown"
+values '{"statusline":{"quietHosts":["laptop"],"sshHosts":{"forgejo":"git.example.org"}}}'
+sockets "old"$'\t'"$SOCK" "forgejo"$'\t'"$SOCK" "garbage line"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main · 🔑 forgejo ✓"
+
+CASE="only labels from another config are cached: no part"
+sockets "old"$'\t'"$SOCK"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main"
+
+CASE="no cache: no part"
+values "$SSHV"
+rm -f -- "$SSTATE/ssh-sockets"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main"
+
+CASE="no sshHosts in the config: no part, whatever is cached"
+values "$QUIET"
+sockets "forgejo"$'\t'"$SOCK"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main"
+
+CASE="a label with a control character, or whose host starts with -, is not shown"
+values '{"statusline":{"quietHosts":["laptop"],"sshHosts":{"a\u001b[2Jb":"github.com","evil":"-oProxyCommand=x","ok":"github.com"}}}'
+sockets "a"$'\e'"[2Jb"$'\t'"$SOCK" "evil"$'\t'"$SOCK" "ok"$'\t'"$SOCK"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main · 🔑 ok ✓"
+
+CASE="the key follows the plan, and prints without a project"
+values "$SSHV"
+sockets "forgejo"$'\t'"$SOCK"
+track "$PL/2026-11-22-galdr.md"
+sl_ssh "$(placed "$H/proj" "$H/proj")"
+expect "$BODY"$'\n'"~/proj · main · plan galdr 71% · 🔑 forgejo ✓"
+rm -f -- "$PSTATE/$P_SID_FULL"
+sl_ssh "$(placed "" "")"
+expect "$BODY"$'\n'"🔑 forgejo ✓"
+
+CASE="no jq: the host tag alone, no key"
+sl_ssh "$(placed "$H/proj" "$H/proj")" PATH="$NO_JQ"
+expect "${TAG}laptop${RESET}"
+rm -f -- "$SSTATE/ssh-sockets"
+
 # --- NO_COLOR --------------------------------------------------------------------
 
 echo "NO_COLOR"

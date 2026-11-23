@@ -21,6 +21,7 @@ a space in its path works.
 | --- | --- | --- | --- |
 | SessionStart | `prune-claude-tmp` | 30 s | deletes the `/tmp/claude-<uid>` folders of sessions that have ended |
 | SessionStart | `session-preflight` | 10 s | warns of Nextcloud conflicted copies and a NetBird mesh that is or goes down |
+| SessionStart | `ssh-sockets` | 10 s | caches the control socket path of each SSH host in `statusline.sshHosts`, for the status line |
 | PreToolUse, matcher `WebSearch` | `web-route` | 5 s | sends WebSearch to `searx` while SearXNG answers |
 | PostToolUse, matcher `Edit\|Write` | `plan-track` | 5 s | records the plan file a session edits, for the status line |
 | WorktreeCreate | `worktree-create` | 600 s | creates and provisions the worktree: ignored files, dependencies, the repository's setup |
@@ -28,7 +29,7 @@ a space in its path works.
 | SubagentStop | `worktree-subagent-stop` | 30 s | sweeps idle subagent worktrees, which Claude Code never removes |
 
 Each script's header says why it exists and what it does in each case.
-`jq`, `curl`, `git`, `netbird`, `pnpm`, `npm` and `uv` come from your PATH.
+`jq`, `curl`, `git`, `netbird`, `ssh`, `pnpm`, `npm` and `uv` come from your PATH.
 The hooks run on Linux and on macOS, where they need Homebrew's bash 4.4 or
 newer first in PATH; Homebrew's `coreutils` is optional. Under macOS's own
 bash 3.2 each hook exits at once without a word, except `worktree-create`
@@ -68,7 +69,7 @@ setting stable.
 The status line prints two lines, each part only when its data exists, and
 a line with no part is not printed. Line 1 is the budget: model and effort,
 context, the 5h and weekly limits, the cache age, credits. Line 2 is place
-and work: `[host · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] · plan <name> <n>%`. The
+and work: `[host · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] · plan <name> <n>% · 🔑 <label> ✓|✗ ...`. The
 project is `workspace.project_dir` with `$HOME` shown as `~`. `↳` follows
 when the current directory is below it (its relative path) or outside it
 (its own path). The branch is read from `.git/HEAD` (a short sha when
@@ -81,6 +82,15 @@ drops `.md` and a leading `YYYY-MM-DD-`, so `2026-11-22-galdr.md` prints as
 `galdr`. The percentage is the frontmatter's `progress:`, and `status: done`
 prints `✓` instead. A plan that was moved or deleted, or has no frontmatter,
 prints no part, and so does a session without `plans.dir`.
+
+The key shows whether the SSH masters in `statusline.sshHosts` still hold:
+`🔑 forgejo ✓ github ✗` prints `✓` for a label whose control socket exists
+and a yellow `✗` for one whose socket is gone. The `ssh-sockets` hook asks
+`ssh -G` for each host's `ControlPath` at the start of a session; `ssh -G`
+reads the SSH config and connects nowhere. A host without a `ControlPath`
+is left out. A label prints only when it is both in the config and in that
+cache, so a cache from an old config shows nothing. Before the hook has run
+once, there is no part.
 
 ## The config file
 
@@ -102,6 +112,7 @@ part off and fails in no other way.
 | `netbird.whenDown` | string, one sentence | `session-preflight.sh` | the NetBird warnings do not say what fails while the mesh is down |
 | `statusline.quietHosts` | list of host names, without a domain | `statusline.sh` | every host shows its tag |
 | `plans.dir` | string, an absolute path | `plan-track.sh` | no plan is recorded, and the status line shows none |
+| `statusline.sshHosts` | object, a label to an SSH host as `ssh` takes it | `ssh-sockets.sh`, `statusline.sh` | no SSH master is watched. A label or host that is empty or holds a control character, and a host that starts with `-`, is left out |
 
 For example:
 
@@ -117,7 +128,10 @@ For example:
     "managementUrl": "https://netbird.example.org:443",
     "whenDown": "While the mesh is down, the deploy server refuses every request."
   },
-  "statusline": { "quietHosts": ["laptop"] },
+  "statusline": {
+    "quietHosts": ["laptop"],
+    "sshHosts": { "forgejo": "git.example.org", "github": "github.com" }
+  },
   "plans": { "dir": "/home/alice/Nextcloud/Notes/plans" }
 }
 ```
@@ -127,7 +141,9 @@ For example:
 The logs go under `${XDG_STATE_HOME:-~/.local/state}/galdr/`:
 `prune-claude-tmp.log` and `worktree-hooks.log`. `plan-track` writes one
 file per session to `galdr/plan/<session id>`, holding the plan's path, and
-deletes the ones older than 30 days. One file stays outside it:
+deletes the ones older than 30 days. `ssh-sockets` writes
+`galdr/ssh-sockets`, one `<label>\t<socket path>` line per watched host. One
+file stays outside it:
 `web-route` caches whether SearXNG answers in
 `${XDG_STATE_HOME:-~/.local/state}/web-route/reachable`, because `searx`
 writes the same file when a search fails, and that is how a failed search
