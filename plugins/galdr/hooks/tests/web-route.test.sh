@@ -78,7 +78,11 @@ EOF
 chmod +x "$STUBS/searx"
 
 cat >"$SB/server.py" <<'EOF'
-import sys, time
+import faulthandler, signal
+# SIGUSR1 prints where every thread is, so a server that never gets ready
+# says where it waits.
+faulthandler.register(signal.SIGUSR1)
+import os, socketserver, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOG, MODE, PORTFILE = sys.argv[1:4]
@@ -100,18 +104,51 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
 
 
-srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+class S(ThreadingHTTPServer):
+    # HTTPServer.server_bind looks up the host's name with socket.getfqdn, a
+    # reverse lookup that waits on the resolver; macOS asks DNS even for
+    # 127.0.0.1. Nothing here needs the name, so the bind skips it.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+srv = S(("127.0.0.1", 0), H)
 srv.daemon_threads = True
-with open(PORTFILE, "w") as f:
+# The server listens already; the rename makes the port file whole or absent.
+with open(PORTFILE + ".tmp", "w") as f:
     f.write(str(srv.server_address[1]))
+os.replace(PORTFILE + ".tmp", PORTFILE)
 srv.serve_forever()
 EOF
 : >"$SB/probes.log"
 echo up >"$SB/mode"
-python3 -I "$SB/server.py" "$SB/probes.log" "$SB/mode" "$SB/port" &
+python3 -I "$SB/server.py" "$SB/probes.log" "$SB/mode" "$SB/port" 2>"$SB/server.err" &
 SERVER_PID=$!
-for _ in $(seq 100); do [ -s "$SB/port" ] && break; sleep 0.05; done
-[ -s "$SB/port" ] || { echo "the fake server did not start" >&2; exit 2; }
+# Ready once the port file is there. The wait is a deadline in seconds, not a
+# count of sleeps, because a short sleep can take far longer than asked on a
+# loaded Mac, and it ends early when the server exits.
+deadline=$((SECONDS + 30))
+while [ ! -s "$SB/port" ] && kill -0 "$SERVER_PID" 2>/dev/null && ((SECONDS < deadline)); do
+    sleep 0.1
+done
+if [ ! -s "$SB/port" ]; then
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+        seen="still running after 30 s and no port written; where it waits:"
+        kill -USR1 "$SERVER_PID" 2>/dev/null
+        sleep 1
+    else
+        wait "$SERVER_PID"
+        seen="exited with status $? before it wrote the port; its stderr:"
+    fi
+    py=$(type -P python3)
+    { echo "the fake server did not start: $seen"
+      sed 's/^/    /' "$SB/server.err"
+      echo "  python3: $py -> $(readlink -f "$py")"
+      echo "  port file: $SB/port ($([ -e "$SB/port" ] && echo empty || echo absent))"
+    } >&2
+    exit 2
+fi
 URL=http://127.0.0.1:$(<"$SB/port")
 DEAD=http://127.0.0.1:$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 
