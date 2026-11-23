@@ -6,7 +6,8 @@
 #   line 1: <model> <effort> · ctx <n>% · 5h <n>% ↻<HH:MM> · wk <n>% ↻<Mo> ·
 #           <Model> <n>% ... · cache <n>m · credits <used>/<limit> €
 #   line 2: [<host> · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] ·
-#           plan <name> <n>%|✓ · 🔑 <label> ✓|✗ ...
+#           plan <name> <n>%|✓ · 🔑 <label> ✓|✗ ... · ⚠ <hint> ·
+#           ⚠ <n> sessions here · ⚠ /tmp <n>%
 # The project is workspace.project_dir with $HOME as ~ (whole components
 # only). ↳ shows the current directory relative to it when below it, in
 # full when outside it. The branch comes from .git/HEAD, or from the gitdir:
@@ -35,6 +36,20 @@
 # longer asked for. The labels come from jq, which drops an empty one, one
 # with a control character, and one whose host is no string or starts with
 # -, as the hook does. No cache yet, no part.
+#
+# Warnings. ⚠ <statusline.requiredEnvHint, else env> when a name in
+# statusline.requiredEnv is missing from the claude process's environment (the
+# parent's, read once with the session kind). ⚠ <n> sessions here counts the
+# other processes whose /proc/<pid>/comm is claude and whose cwd is the
+# project (GALDR_PROC replaces /proc for tests; the parent is skipped). Both
+# read /proc, and without it (macOS) they turn off silently. ⚠ /tmp <n>% shows
+# from 70% (red from 90%) for statusline.tmp.path (default /tmp), as a share
+# of the filesystem or of statusline.tmp.shareBytes. The one process besides
+# jq this script may start is `df -Pk <path>` (1024-blocks, used, available on
+# Linux and macOS), at most every 300 s: its answer is cached in
+# ${XDG_STATE_HOME:-~/.local/state}/galdr/tmp-usage as "<epoch> <used KiB>
+# <size KiB>", written in place (mv would be a process). It needs that
+# directory to exist, which the hooks make; without it df runs every time.
 #
 # Why: the line answers "can I keep going, and what does the next turn cost"
 # without opening /usage. The limits and the cache age are what otherwise
@@ -84,7 +99,9 @@
 #     script runs again, which is after a message, at expires_at, and every
 #     refreshInterval seconds if the statusLine setting has one;
 #   - workspace.project_dir, workspace.current_dir and session_id for line 2,
-#     followed by one field per label of statusline.sshHosts.
+#     followed by the labels of statusline.sshHosts and the names of
+#     statusline.requiredEnv (each list one field), the requiredEnvHint, and
+#     statusline.tmp.path and .shareBytes.
 # Per-model weekly windows (rate_limits.model_scoped[] by display_name, then
 # seven_day_opus and seven_day_sonnet, each {utilization, resets_at}) and
 # extra_usage (amounts in minor units of its currency) are the shapes of the
@@ -113,13 +130,16 @@ color_on=1
 values=${GALDR_CONFIG:-${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}/galdr/config.json}
 [[ -f $values && -r $values ]] || values=/dev/null
 
+# The parent's environment is read once, for the session kind and for the
+# names requiredEnv asks about. Without /proc (macOS) env_ok stays empty and
+# the requiredEnv check is off.
 kind=${CLAUDE_CODE_SESSION_KIND:-}
-if [[ -z $kind ]] && mapfile -d '' -t parent_env 2>/dev/null </proc/"$PPID"/environ; then
+env_ok="" parent_names=" "
+if mapfile -d '' -t parent_env 2>/dev/null </proc/"$PPID"/environ; then
+    env_ok=1
     for kv in "${parent_env[@]}"; do
-        if [[ $kv == CLAUDE_CODE_SESSION_KIND=* ]]; then
-            kind=${kv#*=}
-            break
-        fi
+        parent_names+="${kv%%=*} "
+        if [[ -z $kind && $kv == CLAUDE_CODE_SESSION_KIND=* ]]; then kind=${kv#*=}; fi
     done
 fi
 # One output line: q when the host is quiet and t when it gets its tag, a
@@ -183,6 +203,13 @@ def ssh_labels:
     | select((.key | test("^[^[:cntrl:]]+$"))
         and (.value | type) == "string" and (.value | test("^[^-[:cntrl:]][^[:cntrl:]]*$")))
     | .key;
+def cfgv(f):
+    [($values | try fromjson catch null) | objects | .statusline? | objects | f] | .[0] // "";
+def cfgt(f): cfgv(f) | gsub("[[:cntrl:]]"; "");
+def required_env:
+    ($values | try fromjson catch null)
+    | objects | .statusline? | objects | .requiredEnv? | arrays | .[] | strings
+    | select(test("^[A-Za-z_][A-Za-z0-9_]*$"));
 def body:
 [ (text(.model?.display_name) as $m | text(.effort?.level) as $e
        | if $m != "" and $e != "" then "\($m) \($e)" else $m end),
@@ -201,7 +228,11 @@ def body:
    ($in | text(.workspace?.project_dir)),
    ($in | text(.workspace?.current_dir)),
    ($in | text(.session_id) | gsub("[^A-Za-z0-9-]"; "")),
-   ([ssh_labels] | join("\u001f"))]
+   ([ssh_labels] | join("\u001f")),
+   ([required_env] | join("\u001f")),
+   cfgt(.requiredEnvHint? | strings),
+   cfgt(.tmp? | objects | .path? | strings),
+   cfgv(.tmp? | objects | .shareBytes? | numbers | select(. > 0) | floor | tostring)]
 | map("_" + .) | join("\t")'
 # Every field leads with _, which is stripped below: read splits on a tab as
 # on white space, so an empty field would otherwise swallow its neighbour.
@@ -215,6 +246,9 @@ current_dir=${fields[3]} session_id=${fields[4]}
 # the fields keep their places and later ones follow this one.
 ssh_labels=()
 [[ -n ${fields[5]-} ]] && IFS=$'\x1f' read -r -a ssh_labels <<<"${fields[5]}"
+required_env=()
+[[ -n ${fields[6]-} ]] && IFS=$'\x1f' read -r -a required_env <<<"${fields[6]}"
+env_hint=${fields[7]-} tmp_path=${fields[8]:-/tmp} tmp_share=${fields[9]-}
 
 # short_path <abs>: the path with $HOME as ~, on a whole component only, so
 # /home/user2 is not ~2 under HOME=/home/user.
@@ -324,6 +358,59 @@ if ((${#ssh_labels[@]})); then
         done
     done
     [[ -n $keys ]] && parts+=("🔑$keys")
+fi
+
+# Warnings. A name of requiredEnv missing from the claude process's
+# environment, other claude processes with this project as their cwd (the
+# parent is skipped), and a full /tmp. The first two read /proc and are off
+# without it.
+if [[ -n $env_ok ]]; then
+    for n in "${required_env[@]}"; do
+        if [[ $parent_names != *" $n "* ]]; then parts+=("⚠ ${env_hint:-env}"); break; fi
+    done
+fi
+if [[ -n $project_dir ]]; then
+    n=0 proc=${GALDR_PROC:-/proc}
+    for d in "$proc"/[0-9]*; do
+        [[ ${d##*/} == "$PPID" ]] && continue
+        c=""
+        read -r c 2>/dev/null <"$d/comm" || continue
+        if [[ $c == claude && $d/cwd -ef $proj ]]; then n=$((n + 1)); fi
+    done
+    ((n)) && parts+=("⚠ $n session$([[ $n == 1 ]] || printf s) here")
+fi
+# /tmp: df is the one process this script may start besides jq, at most
+# every 300 s. Its answer is cached as "<epoch> <used KiB> <size KiB>".
+tmp_file=${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/galdr/tmp-usage
+printf -v now '%(%s)T' -1
+t_at="" t_used="" t_size=""
+read -r t_at t_used t_size 2>/dev/null <"$tmp_file"
+if ! [[ $t_at =~ ^[0-9]+$ && $t_used =~ ^[0-9]+$ && $t_size =~ ^[0-9]+$ ]] \
+    || ((t_at > now || now - t_at >= 300)); then
+    t_used="" t_size=""
+    df_out=$(df -Pk -- "$tmp_path" 2>/dev/null)
+    { read -r _; read -r _ t_size t_used _; } <<<"$df_out"
+    if [[ $t_used =~ ^[0-9]+$ && $t_size =~ ^[0-9]+$ ]]; then
+        { printf '%s %s %s\n' "$now" "$t_used" "$t_size" >"$tmp_file"; } 2>/dev/null
+    else
+        t_used=""
+    fi
+fi
+if [[ -n $t_used ]]; then
+    if [[ $tmp_share =~ ^[0-9]+$ ]] && ((tmp_share > 0)); then
+        pct=$(((t_used * 1024 * 100 + tmp_share / 2) / tmp_share))
+    elif ((t_size > 0)); then
+        pct=$(((t_used * 100 + t_size / 2) / t_size))
+    else
+        pct=0
+    fi
+    if ((pct >= 70)); then
+        part="⚠ ${tmp_path} $pct%"
+        if [[ -z $color_on ]]; then :
+        elif ((pct >= 90)); then part=$'\e[1;31m'$part$'\e[0m'
+        else part=$'\e[33m'$part$'\e[0m'; fi
+        parts+=("$part")
+    fi
 fi
 
 line2=""

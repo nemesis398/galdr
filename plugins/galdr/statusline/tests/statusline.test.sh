@@ -42,6 +42,7 @@ DATE_BIN=$(type -P date) || { echo "the tests need date, which is not installed"
 pass=0
 fail=0
 CASE=""
+PARENT_EXTRA=()
 ERR="" RC=0
 
 ok()  { pass=$((pass+1)); printf '  \033[32m✓\033[0m %s\n' "$CASE"; }
@@ -73,13 +74,13 @@ TAG=$'\e[7;95m' YELLOW=$'\e[33m' RED=$'\e[1;31m' RESET=$'\e[0m'
 # given pairs as its whole environment, and sets ERR and RC. A later PATH=,
 # TZ= or GALDR_CONFIG= overrides the default. PARENT_KIND, when
 # set, goes into the parent's environment only, which is where Claude Code
-# leaves CLAUDE_CODE_SESSION_KIND. TZDIR passes through when it is set, as
+# leaves CLAUDE_CODE_SESSION_KIND, as do the NAME=value pairs of PARENT_EXTRA. TZDIR passes through when it is set, as
 # in the Nix build sandbox, which has no /usr/share/zoneinfo.
 run_sl() {
     local input=$1
     shift
     printf '%s' "$input" >"$ROOT/in"
-    "$ENV_BIN" -i ${PARENT_KIND:+"CLAUDE_CODE_SESSION_KIND=$PARENT_KIND"} \
+    "$ENV_BIN" -i ${PARENT_KIND:+"CLAUDE_CODE_SESSION_KIND=$PARENT_KIND"} ${PARENT_EXTRA[@]+"${PARENT_EXTRA[@]}"} \
         "$BASH" -c '"$@"; exit $?' parent \
         "$ENV_BIN" -i PATH="$WITH_JQ" TZ=UTC ${TZDIR:+"TZDIR=$TZDIR"} \
         GALDR_CONFIG="$ROOT/values.json" "$@" "$BASH" "$SL" \
@@ -878,6 +879,152 @@ for c in "missing:$ROOT/no-such-config.json" "empty:$ROOT/empty-config.json" "ma
     expect "$BODY"$'\n'"${TAG}laptop${RESET}"
 done
 rm -f -- "$ROOT/empty-config.json" "$ROOT/malformed-config.json"
+
+# --- the warnings ----------------------------------------------------------------
+
+echo "the warnings"
+
+# slw <stdin> [VAR=value...]: a placed payload under the config in v.json,
+# with an empty state directory of its own so no earlier case's cache shows.
+WSTATE=$ROOT/wstate
+slw() {
+    rm -rf -- "$WSTATE"; mkdir -p "$WSTATE/galdr"
+    run_sl "$1" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$WSTATE" GALDR_CONFIG="$ROOT/v.json" "${@:2}"
+}
+WP=$(placed "$H/proj" "$H/proj")
+WB="$BODY"$'\n'"~/proj · main"
+cfg() { values '{"statusline":{"quietHosts":["laptop"]'"$1"'}}'; }
+
+CASE="env missing: a name the parent lacks gives the hint"
+cfg ',"requiredEnv":["A","B"],"requiredEnvHint":"ai-unlock"'
+PARENT_EXTRA=(A=1)
+slw "$WP"
+expect "$WB · ⚠ ai-unlock"
+
+CASE="env missing without a hint: ⚠ env"
+cfg ',"requiredEnv":["A","B"]'
+slw "$WP"
+expect "$WB · ⚠ env"
+
+CASE="env complete: no part"
+PARENT_EXTRA=(A=1 B=)
+slw "$WP"
+expect "$WB"
+PARENT_EXTRA=()
+
+CASE="a field after ssh_labels keeps its place when the label list is empty"
+cfg ',"requiredEnv":["A"],"requiredEnvHint":"ai-unlock"'
+slw "$WP"
+expect "$WB · ⚠ ai-unlock"
+
+CASE="a field after ssh_labels still lines up when the labels are there"
+cfg ',"sshHosts":{"forgejo":"git.example.org"},"requiredEnv":["A"],"requiredEnvHint":"ai-unlock","tmp":{"path":"/var"}'
+rm -rf -- "$WSTATE"; mkdir -p "$WSTATE/galdr"
+sockets_w() { printf '%s\n' "$@" >"$WSTATE/galdr/ssh-sockets"; }
+sockets_w "forgejo"$'\t'"$SOCK"
+run_sl "$WP" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$WSTATE" GALDR_CONFIG="$ROOT/v.json"
+expect "$WB · 🔑 forgejo ✓ · ⚠ ai-unlock"
+
+# A fake /proc: <pid>/comm and a cwd link, as the kernel has them.
+FP=$ROOT/fakeproc
+fakeproc() { rm -rf -- "$FP"; mkdir -p "$FP"; }
+fakepid() { mkdir -p "$FP/$1"; printf '%s\n' "$2" >"$FP/$1/comm"; ln -s "$3" "$FP/$1/cwd"; }
+mkdir -p "$H/proj" "$H/other"
+
+CASE="sessions here: two claude processes in the project count, others do not"
+cfg ''
+fakeproc
+fakepid 901 claude "$H/proj"; fakepid 902 claude "$H/proj"
+fakepid 903 claude "$H/other"; fakepid 904 bash "$H/proj"
+slw "$WP" GALDR_PROC="$FP"
+expect "$WB · ⚠ 2 sessions here"
+
+CASE="sessions here: one other session reads as singular"
+fakeproc; fakepid 901 claude "$H/proj"
+slw "$WP" GALDR_PROC="$FP"
+expect "$WB · ⚠ 1 session here"
+
+CASE="sessions here: none, and no proc root at all, print no part"
+fakeproc; fakepid 903 claude "$H/other"
+slw "$WP" GALDR_PROC="$FP"
+expect "$WB"
+slw "$WP" GALDR_PROC="$ROOT/no-such-proc"
+expect "$WB"
+
+CASE="requiredEnv is off without /proc, silently"
+cfg ',"requiredEnv":["A"]'
+slw "$WP" GALDR_PROC="$ROOT/no-such-proc"
+expect "$WB · ⚠ env"
+
+# The /tmp cache: "<epoch> <used KiB> <size KiB>". tmpc <age s> <used> <size>.
+NOW=$("$DATE_BIN" +%s)
+tmpc() { printf '%s %s %s\n' "$((NOW - $1))" "$2" "$3" >"$WSTATE/galdr/tmp-usage"; }
+slt() { run_sl "$WP" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$WSTATE" GALDR_CONFIG="$ROOT/v.json" "$@"; }
+reset_w() { rm -rf -- "$WSTATE"; mkdir -p "$WSTATE/galdr"; }
+
+CASE="tmp fresh cache: 78% in yellow, and no df runs"
+cfg ''
+reset_w; tmpc 10 780 1000
+slt
+expect "$WB · ${YELLOW}⚠ /tmp 78%${RESET}"
+
+CASE="tmp red from 90%, plain with NO_COLOR"
+reset_w; tmpc 10 905 1000
+slt
+expect "$WB · ${RED}⚠ /tmp 91%${RESET}"
+slt NO_COLOR=1
+expect "$WB · ⚠ /tmp 91%"
+
+CASE="tmp under 70: no part"
+reset_w; tmpc 10 690 1000
+slt
+expect "$WB"
+
+CASE="tmp share: shareBytes sets the base (50% of it hides, 75% shows), not the filesystem's size"
+cfg ',"tmp":{"shareBytes":2097152000}'
+reset_w; tmpc 10 1024000 100000000
+slt
+expect "$WB"
+reset_w; tmpc 10 1536000 100000000
+slt
+expect "$WB · ${YELLOW}⚠ /tmp 75%${RESET}"
+
+# A fake df that logs its arguments and answers like df -Pk.
+WITH_DF=$ROOT/with-df
+mkdir -p "$WITH_DF"; ln -sf "$JQ_BIN" "$WITH_DF/jq"
+# shellcheck disable=SC2016
+printf '%s\n' "#!$BASH" 'printf "%s\n" "$*" >>"$DFLOG"' \
+    'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/x 1000 800 200 80%% /tmp\n"' >"$WITH_DF/df"
+chmod +x "$WITH_DF/df"
+
+CASE="tmp stale: a cache older than 300 s is refreshed from df -Pk, and rewritten"
+cfg ''
+reset_w; tmpc 400 100 1000
+: >"$ROOT/dflog"
+slt PATH="$WITH_DF" DFLOG="$ROOT/dflog"
+expect "$WB · ${YELLOW}⚠ /tmp 80%${RESET}"
+if [ "$(cat "$ROOT/dflog")" = "-Pk -- /tmp" ] && read -r at used size <"$WSTATE/galdr/tmp-usage" \
+    && [ "$used $size" = "800 1000" ] && [ $((at - NOW)) -ge 0 ]; then ok; else bad "df call or cache wrong: $(cat "$ROOT/dflog") / $(cat "$WSTATE/galdr/tmp-usage")"; fi
+
+CASE="tmp missing cache: df runs for statusline.tmp.path"
+cfg ',"tmp":{"path":"/var/tmp"}'
+reset_w; : >"$ROOT/dflog"
+slt PATH="$WITH_DF" DFLOG="$ROOT/dflog"
+expect "$WB · ${YELLOW}⚠ /var/tmp 80%${RESET}"
+if [ "$(cat "$ROOT/dflog")" = "-Pk -- /var/tmp" ]; then ok; else bad "df call: $(cat "$ROOT/dflog")"; fi
+
+CASE="tmp fresh cache starts no df"
+reset_w; tmpc 10 100 1000; : >"$ROOT/dflog"
+slt PATH="$WITH_DF" DFLOG="$ROOT/dflog"
+expect "$WB"
+if [ ! -s "$ROOT/dflog" ]; then ok; else bad "df ran"; fi
+
+CASE="tmp: no df and no cache is silent"
+cfg ''
+reset_w
+slt
+expect "$WB"
+cfg ''
 
 # --- plugin-root-space ------------------------------------------------------------
 

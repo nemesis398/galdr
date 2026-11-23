@@ -92,6 +92,17 @@ is left out. A label prints only when it is both in the config and in that
 cache, so a cache from an old config shows nothing. Before the hook has run
 once, there is no part.
 
+Three warnings follow, each only when it applies. `⚠ <hint>` shows when a
+name in `statusline.requiredEnv` is missing from the environment of the
+`claude` process (the hint is `statusline.requiredEnvHint`, else `env`).
+`⚠ <n> sessions here` counts the other `claude` processes whose working
+directory is the project. `⚠ /tmp <n>%` shows from 70% (red from 90%) of
+the filesystem under `statusline.tmp.path`, or of `statusline.tmp.shareBytes`
+when that is set. The first two read `/proc` and are off without it, as on
+macOS. The disk figure comes from `df -Pk`, run at most every 300 s and
+cached in `${XDG_STATE_HOME:-~/.local/state}/galdr/tmp-usage`, which is the
+one process the status line starts besides `jq`.
+
 ## The config file
 
 The hooks and the status line read their values from one JSON file:
@@ -113,6 +124,10 @@ part off and fails in no other way.
 | `statusline.quietHosts` | list of host names, without a domain | `statusline.sh` | every host shows its tag |
 | `plans.dir` | string, an absolute path | `plan-track.sh` | no plan is recorded, and the status line shows none |
 | `statusline.sshHosts` | object, a label to an SSH host as `ssh` takes it | `ssh-sockets.sh`, `statusline.sh` | no SSH master is watched. A label or host that is empty or holds a control character, and a host that starts with `-`, is left out |
+| `statusline.requiredEnv` | list of variable names | `statusline.sh` | no environment check. Needs `/proc` |
+| `statusline.requiredEnvHint` | string, a few words | `statusline.sh` | the warning says `env` |
+| `statusline.tmp.path` | string, an absolute path | `statusline.sh` | `/tmp` |
+| `statusline.tmp.shareBytes` | number of bytes | `statusline.sh` | the size of the filesystem |
 
 For example:
 
