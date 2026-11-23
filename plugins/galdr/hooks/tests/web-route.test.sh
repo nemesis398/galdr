@@ -275,9 +275,11 @@ forge "$(( $(now) - 61 )) down"; mode up
 run -- "$(search q)"
 check "a stale down entry recovers when SearXNG is back" '[[ $out == *deny* && $(<"$CACHE") =~ ^[0-9]+\ up$ ]]'
 
-forge "$(( $(now) - 59 )) down"; : >"$SB/probes.log"
+# 50, not 59: a slow runner (seen on macos-15-intel) can spend the last
+# second before the hook reads the entry, and then it is 60 s old.
+forge "$(( $(now) - 50 )) down"; : >"$SB/probes.log"
 run -- "$(search q)"
-check "an entry 59 seconds old is still fresh" 'silent && [[ $(probes) == 0 ]]'
+check "an entry 50 seconds old is still fresh" 'silent && [[ $(probes) == 0 ]]'
 
 forge "$(( $(now) + 1000 )) down"; : >"$SB/probes.log"
 run -- "$(search q)"
