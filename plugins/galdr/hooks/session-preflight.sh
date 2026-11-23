@@ -58,11 +58,21 @@
 # time. Output the hook cannot read gets a mild "cannot tell" note, never an
 # alarm. Without netbird installed the check is skipped.
 #
+# macOS: nothing here needs GNU tools. The session end is read by
+# rfc3339_epoch below instead of `date -d`, and the 3 s limit on netbird
+# comes from limit, which uses gtimeout or timeout where there is one.
+#
 # No set -e or -u: any probe may fail, and the hook must still exit 0.
+
+# macOS's /bin/bash is 3.2, which runs this hook when no newer bash comes
+# first in PATH. It lacks bash 4 features the hook uses, so the guard is
+# written for bash 3.2 too, and the hook does nothing rather than fail
+# halfway.
+if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 404)); then exit 0; fi
 
 max_listed=20      # conflicted copies named in the context; the rest are counted
 max_context=9000   # characters of context; Claude Code's limit is 10,000
-now=$EPOCHSECONDS
+printf -v now '%(%s)T' -1
 
 cf_short="" cf_detail="" nb_short="" nb_detail=""
 
@@ -89,6 +99,101 @@ vault_root=${vault_root%/}
 mesh_url=${mesh_url%/}
 
 login_note="Its SSO login opens in the user's browser, so ask the user to run it."
+
+# --- portability --------------------------------------------------------------
+
+# limit <kill-after> <seconds> <command...>: GNU timeout's contract on GNU
+# and BSD userlands. With gtimeout (Homebrew coreutils) or timeout, that runs
+# in the background, where it leads a process group of its own, and the hook
+# waits for it alone; when it returns, what is left of the group is killed:
+# uutils timeout (Ubuntu 26.04) sends its SIGKILL to the command alone. With
+# neither, the command runs as a process group of its own (set -m); at the
+# limit the whole group gets SIGTERM, then SIGKILL <kill-after> seconds later
+# (0: never), and once the command is done, what is left of the group is
+# killed as well. Exits 124 after SIGTERM, 137 after SIGKILL, else with the
+# command's own status. The fallback needs sleep and bash 5.1 (wait -p);
+# without either the command runs without a limit. A background command reads
+# /dev/null, so give it its stdin by redirection.
+# The worktree hooks carry the same function.
+limit() {
+    local k=$1 s=$2 t pid spid fin rc
+    shift 2
+    if t=$(type -P gtimeout || type -P timeout); then
+        "$t" -k "$k" "$s" "$@" &
+        pid=$!
+        wait "$pid" 2>/dev/null # no "Killed" job notice on the hook's stderr
+        rc=$?
+        kill -KILL -- "-$pid" 2>/dev/null
+        return "$rc"
+    fi
+    if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 501)) || ! type -P sleep >/dev/null; then
+        "$@"
+        return
+    fi
+    set -m
+    "$@" &
+    pid=$!
+    set +m
+    sleep "$s" >/dev/null 2>&1 &
+    spid=$!
+    wait -n -p fin "$pid" "$spid" 2>/dev/null
+    rc=$?
+    if [[ $fin == "$pid" ]]; then
+        kill "$spid" 2>/dev/null
+        wait "$spid" 2>/dev/null
+        kill -KILL -- "-$pid" 2>/dev/null
+        return "$rc"
+    fi
+    kill -TERM -- "-$pid" 2>/dev/null
+    rc=124
+    if ((k > 0)); then
+        sleep "$k" >/dev/null 2>&1 &
+        spid=$!
+        wait -n -p fin "$pid" "$spid" 2>/dev/null
+        if [[ $fin == "$pid" ]]; then
+            kill "$spid" 2>/dev/null
+            wait "$spid" 2>/dev/null
+            kill -KILL -- "-$pid" 2>/dev/null
+            return 124
+        fi
+        kill -KILL -- "-$pid" 2>/dev/null
+        rc=137
+    fi
+    wait "$pid" 2>/dev/null
+    return "$rc"
+}
+
+# rfc3339_epoch <time>: sets epoch to the seconds since 1970 of an RFC 3339
+# time (T, t or a space between date and time; Z, z or +hh:mm / -hh:mm),
+# fractional seconds dropped as date +%s drops them. Fails on anything else,
+# an impossible date like February 30 included, so "tomorrow" or a version
+# string never reads as a time. Plain bash arithmetic (Howard Hinnant's
+# days_from_civil) rather than a date command, because none parses this on
+# both systems: GNU date -d takes free text and BSD date has no -d; BSD
+# date -j -f needs a fixed format, and macOS strptime's %z does not take "Z"
+# or a colon in the offset on every release; jq's fromdateiso8601 takes only
+# Z and no fraction. This way the same code runs on both, and the Linux tests
+# cover the Mac. Go's zero time, year 1, comes out negative.
+rfc3339_epoch() {
+    local re='^([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt ]([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?([Zz]|([+-])([0-9]{2}):([0-9]{2}))$'
+    local y m d H M S off=0 era yoe doy mdays=(0 31 28 31 30 31 30 31 31 30 31 30 31)
+    [[ $1 =~ $re ]] || return 1
+    y=$((10#${BASH_REMATCH[1]})) m=$((10#${BASH_REMATCH[2]})) d=$((10#${BASH_REMATCH[3]}))
+    H=$((10#${BASH_REMATCH[4]})) M=$((10#${BASH_REMATCH[5]})) S=$((10#${BASH_REMATCH[6]}))
+    ((m >= 1 && m <= 12)) || return 1
+    ((y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) && mdays[2]=29
+    ((d >= 1 && d <= mdays[m] && H <= 23 && M <= 59 && S <= 60)) || return 1
+    if [[ -n ${BASH_REMATCH[9]} ]]; then
+        ((10#${BASH_REMATCH[10]} <= 23 && 10#${BASH_REMATCH[11]} <= 59)) || return 1
+        off=$(((10#${BASH_REMATCH[10]} * 60 + 10#${BASH_REMATCH[11]}) * 60))
+        [[ ${BASH_REMATCH[9]} == - ]] && off=$((-off))
+    fi
+    ((y -= m <= 2))
+    era=$(((y >= 0 ? y : y - 399) / 400))
+    yoe=$((y - era * 400))
+    doy=$(((153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1))
+    epoch=$(((era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468) * 86400 + H * 3600 + M * 60 + S - off))
+}
 
 # --- conflicted copies ---------------------------------------------------------
 
@@ -204,22 +309,16 @@ check_netbird() {
         return
     fi
 
-    # The output goes to a file and the hook waits for timeout alone: a pipe
-    # waits for every process netbird started, and uutils timeout (Ubuntu
-    # 26.04) sends its SIGKILL to netbird alone, so a child that ignores
-    # SIGTERM held one open for 30 s. What is left of timeout's process group
-    # is killed afterwards.
+    # The output goes to a file: a pipe waits for every process netbird
+    # started, and a child that ignores SIGTERM held one open for 30 s.
     # 124 is SIGTERM after 3 s, 137 the SIGKILL a second later.
-    local tmp pid
+    local tmp
     if ! tmp=$(mktemp 2>/dev/null); then
         nb_unknown "mktemp failed, so netbird status --json was not run" "no temp file"
         return
     fi
-    timeout -k 1 3 netbird status --json >"$tmp" 2>&1 </dev/null &
-    pid=$!
-    wait "$pid" 2>/dev/null # no "Killed" job notice on the hook's stderr
+    limit 1 3 netbird status --json >"$tmp" 2>&1 </dev/null
     rc=$?
-    kill -KILL -- "-$pid" 2>/dev/null
     out=$(<"$tmp")
     rm -f -- "$tmp"
     if ((rc == 124 || rc == 137)); then
@@ -278,12 +377,11 @@ text(.management.url), text(.sessionExpiresAt), text(.daemonStatus), text(.manag
 
     # Connected. An empty expiry is a peer whose session does not end.
     [[ -n $expires ]] || return 0
-    # date -d also takes "tomorrow", so only an RFC 3339 time goes to it.
-    if [[ ! $expires =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt\ ][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$ ]] ||
-        ! exp_at=$(date -d "$expires" +%s 2>/dev/null) || [[ ! $exp_at =~ ^-?[0-9]+$ ]]; then
+    if ! rfc3339_epoch "$expires"; then
         nb_unknown "sessionExpiresAt is \"${expires:0:60}\", which is not a time it can read, so it cannot tell when the SSO session ends" "session end unreadable"
         return
     fi
+    exp_at=$epoch
     # Go's zero time (year 1) or the epoch: no end either.
     ((exp_at > 0)) || return 0
     if ((exp_at <= now)); then

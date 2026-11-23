@@ -18,6 +18,9 @@
 # stderr. The other holds a stub netbird that prints a fixture; leaving it out
 # of PATH is how "not installed" is simulated.
 #
+# Every case runs once per userland of lib/bsd-shims.sh: GNU, BSD (macOS
+# without coreutils: no date -d, no timeout) and BSD with Homebrew's g-tools.
+#
 # Run:  bash session-preflight.test.sh     (exit 0 = all green)
 # The sandbox lives under ${TMPDIR:-/tmp} and is removed on exit. The two
 # hanging-netbird cases take about 3 and 4 s, the rest well under a second.
@@ -27,6 +30,9 @@ set -uo pipefail
 SELF=$(readlink -f "$0")
 HOOK=${SELF%/*/*}/session-preflight.sh
 [ -f "$HOOK" ] || { echo "missing $HOOK" >&2; exit 2; }
+# shellcheck source=/dev/null
+. "${SELF%/*}/lib/bsd-shims.sh"
+bsd_each_userland "$SELF" "$@"
 ENV_BIN=$(type -P env) || { echo "the tests need env, which is not installed" >&2; exit 2; }
 JQ_BIN=$(type -P jq)   || { echo "the tests need jq, which is not installed" >&2; exit 2; }
 
@@ -45,11 +51,15 @@ trap 'rm -rf -- "$ROOT"' EXIT
 # The tools the hook may call, with and without jq.
 TOOLS=$ROOT/tools NO_JQ=$ROOT/no-jq STUBS=$ROOT/stubs
 mkdir -p "$TOOLS" "$NO_JQ" "$STUBS" "$ROOT/home" "$ROOT/nb"
-for tool in find sort jq timeout date mktemp rm; do
-    bin=$(type -P "$tool") || { echo "the tests need $tool, which is not installed" >&2; exit 2; }
+for tool in find sort jq timeout date mktemp rm sleep; do
+    if ! bin=$(type -P "$tool"); then
+        [ "$GALDR_USERLAND" != gnu ] && bsd_hides "$tool" && continue
+        echo "the tests need $tool, which is not installed" >&2; exit 2
+    fi
     ln -s "$bin" "$TOOLS/$tool"
     [ "$tool" = jq ] || ln -s "$bin" "$NO_JQ/$tool"
 done
+bsd_apply "$TOOLS" "$NO_JQ" || exit 2
 
 # The stub netbird: prints the file NB_OUT names (on stderr with NB_STDERR=1)
 # and exits with NB_RC. NB_HANG=1 first waits in a child process, which would
@@ -472,6 +482,19 @@ expect_json
 sys_is "NetBird session ends at $(at 3000 %H:%M) (in 50 min): run netbird login --extend"
 verdict
 
+begin "preflight_expiry_without_date_d: an expiry of 2025-11-24T10:00:00+01:00 ended at 09:00 UTC"
+run_hook NB_OUT="$(nb offset-past '.sessionExpiresAt = "2025-11-24T10:00:00+01:00"')"
+expect_json
+sys_is "NetBird down: run netbird up"
+has "NetBird: this machine is off the mesh (its SSO session ended at 2025-11-24 09:00 UTC)."
+verdict
+
+begin "preflight_expiry_without_date_d: an expiry 50 min ahead in +01:00 warns as in UTC"
+run_hook NB_OUT="$(nb offset-soon ".sessionExpiresAt = \"$(TZ=Etc/GMT-1 date -d "@$((EPOCHSECONDS + 3000))" +%Y-%m-%dT%H:%M:%S+01:00)\"")"
+expect_json
+sys_is "NetBird session ends at $(at 3000 %H:%M) (in 50 min): run netbird login --extend"
+verdict
+
 begin "a session that ended an hour ago counts as not connected"
 run_hook NB_OUT="$(nb expired ".sessionExpiresAt = \"$(iso -3600)\"")"
 expect_json
@@ -704,6 +727,17 @@ RC=$? OUT=$(<"$ROOT/out") ERR=$(<"$ROOT/err")
 expect_json
 sys_is "$FULL_SYS"
 verdict
+
+# macOS's /bin/bash 3.2 runs the hook when no newer bash comes first in PATH.
+B3=$ROOT/bash3
+mkdir -p "$B3" && bash3_stub "$B3"
+begin "bash3_silent: under bash 3.2 it exits 0 and says nothing, copies or not"
+printf '%s' "$PAYLOAD" >"$ROOT/in"
+"$ENV_BIN" -i PATH="$B3:$TOOLS:$STUBS" HOME="$ROOT/home" TZ=UTC NB_OUT="$HEALTHY" \
+    GALDR_CONFIG="$(skill_values "$FULL")" CLAUDE_PLUGIN_ROOT="$SPACE" "$BASH" -c "$CMD" \
+    <"$ROOT/in" >"$ROOT/out" 2>"$ROOT/err"
+RC=$? OUT=$(<"$ROOT/out") ERR=$(<"$ROOT/err")
+expect_silent
 
 # --- summary ----------------------------------------------------------------------
 

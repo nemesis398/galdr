@@ -1,6 +1,6 @@
 {
   "name": "galdr",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hooks and a status line for Claude Code: dead temp folders pruned, a session preflight for sync conflicts and the mesh, WebSearch routed to a self-hosted SearXNG, and provisioned git worktrees",
   "author": {
     "name": "nemesis398",

@@ -16,6 +16,10 @@
 # the default branch), and CLAUDE_CONFIG_DIR and XDG_STATE_HOME point into the
 # sandbox, so the user's own settings and log are never read or written.
 #
+# Every case runs once per userland of lib/bsd-shims.sh: GNU, BSD (macOS
+# without coreutils: no stat -c, no timeout, setsid or flock) and BSD with
+# Homebrew's g-tools.
+#
 # Run:  bash worktree-hooks.test.sh          (exit 0 = all green)
 # The sandbox lives under ${TMPDIR:-/tmp} and is removed on exit.
 
@@ -23,6 +27,9 @@ set -uo pipefail
 
 SELF=$(readlink -f "$0")
 HOOKS=${SELF%/*/*}
+# shellcheck source=/dev/null
+. "${SELF%/*}/lib/bsd-shims.sh"
+bsd_each_userland "$SELF" "$@"
 CREATE=$HOOKS/worktree-create.sh
 REMOVE=$HOOKS/worktree-remove.sh
 STOP=$HOOKS/worktree-subagent-stop.sh
@@ -46,10 +53,14 @@ trap 'rm -rf -- "$ROOT"' EXIT
 
 SYS=$ROOT/sys STUBS=$ROOT/stubs NOPNPM=$ROOT/stubs-nopnpm
 mkdir -p "$SYS" "$STUBS" "$NOPNPM" "$ROOT/claude-user" "$ROOT/state"
-for t in bash sh env git jq date mkdir cp rm stat realpath timeout setsid flock cat; do
-    p=$(type -P "$t") || { echo "the hooks need $t, which is not installed" >&2; exit 2; }
+for t in bash sh env git jq date mkdir cp rm stat timeout setsid flock cat sleep; do
+    if ! p=$(type -P "$t"); then
+        [ "$GALDR_USERLAND" != gnu ] && bsd_hides "$t" && continue
+        echo "the hooks need $t, which is not installed" >&2; exit 2
+    fi
     ln -s "$p" "$SYS/$t"
 done
+bsd_apply "$SYS" || exit 2
 # Every script a test writes starts with the bash that runs the tests: the
 # Nix build sandbox has no /usr/bin/env.
 for t in pnpm npm uv; do
@@ -99,6 +110,7 @@ TEARDOWN_SCRIPT="#!$BASH"'
       while read -r k v; do [ "$k $v" = "worktree $WORKTREE_PATH" ] && echo "registered=yes"; done; } >"$TEARDOWN_OUT"
 echo "teardown cwd=$PWD" >>"$STUB_LOG"
 echo "teardown: a line on stdout that must never reach Claude"
+[ -z "${TEARDOWN_SLEEP:-}" ] || "$SLEEP_BIN" "$TEARDOWN_SLEEP"
 case ${TEARDOWN_HANG:-} in
     term) "$SLEEP_BIN" 30 & echo "$!" >"$TEARDOWN_OUT.child"; wait ;;
     stubborn) trap "" TERM; "$SLEEP_BIN" 30 & echo "$!" >"$TEARDOWN_OUT.child"; wait ;;
@@ -719,12 +731,23 @@ age() {
     done
 }
 
-# sweep_done <log text>: the sweep runs detached under a flock on
-# .git/worktrees. Its first log line proves it holds the lock; getting the
-# lock afterwards proves it has finished.
+# sweep_done <log text>: the sweep runs detached under a lock, a flock on
+# .git/worktrees where flock exists, else the directory SWEEP_LOCK. Its first
+# log line proves it holds the lock; getting the lock afterwards proves it
+# has finished.
+SWEEP_LOCK=.git/galdr-worktree-sweep.lock
 sweep_done() {
+    local _
     wait_for_log "$1" || return 1
-    flock -w 10 "$MAIN/.git/worktrees" true
+    if [ "$GALDR_USERLAND" = gnu ]; then
+        flock -w 10 "$MAIN/.git/worktrees" true
+        return
+    fi
+    for _ in $(seq 1 100); do
+        [ -e "$MAIN/$SWEEP_LOCK" ] || return 0
+        sleep 0.1
+    done
+    return 1
 }
 
 reason_for() { # reason_for <path>: the last decision logged about it
@@ -847,6 +870,36 @@ elif grep -qF "teardown cwd=$W2" "$STUB_LOG";   then bad "the stopping agent's o
 elif [ "$(reason_for "$W1")" != "idle 0 h; teardown ran; branch worktree-agent-$A1 deleted" ]; then bad "wrong reason: $(reason_for "$W1")"
 else ok; fi
 
+CASE="subagent_stop_without_flock_setsid: two stops at once sweep once, under one lock holder"
+FIX_TEARDOWN=1 make_repo
+create "agent-$A1"; W1=$OUT
+create "agent-$A2"; W2=$OUT
+age "$W1" 2
+: >"$STUB_LOG"
+json=$(jq -nc --arg c "$W2" --arg a "$A2" \
+    '{session_id:"s1",transcript_path:"/dev/null",cwd:$c,hook_event_name:"SubagentStop",stop_hook_active:false,agent_id:$a,agent_type:"general-purpose"}')
+for i in 1 2; do
+    (cd "$W2" && printf '%s' "$json" | TEARDOWN_SLEEP=1 PATH=$HOOK_PATH "$BASH" "$STOP" \
+        >"$ROOT/out$i" 2>"$ROOT/err$i") &
+done
+wait
+holders=bad
+for _ in $(seq 1 100); do grep -qxF "teardown cwd=$W1" "$STUB_LOG" && break; sleep 0.1; done
+if [ "$GALDR_USERLAND" = gnu ]; then
+    flock -n "$MAIN/.git/worktrees" true || holders=1
+else
+    mapfile -t pids <"$MAIN/$SWEEP_LOCK/pid" 2>/dev/null
+    [ "${#pids[@]}" = 1 ] && kill -0 "${pids[0]}" 2>/dev/null && holders=1
+fi
+if   ! sweep_done "subagent-stop agent-$A1 $W1 removed"; then bad "no removal logged: $(reason_for "$W1")"
+elif [ -s "$ROOT/out1" ] || [ -s "$ROOT/out2" ] || [ -s "$ROOT/err1" ] || [ -s "$ROOT/err2" ]; then bad "a stop printed something"
+elif [ "$holders" != 1 ]; then bad "during the teardown the lock had no single live holder"
+elif [ -e "$W1" ];   then bad "the worktree is still there"
+elif [ "$(grep -cxF "teardown cwd=$W1" "$STUB_LOG")" != 1 ]; then bad "the teardown ran $(grep -cxF "teardown cwd=$W1" "$STUB_LOG") times"
+elif [ "$(grep -cF "subagent-stop agent-$A1 $W1 removed" "$LOG")" != 1 ]; then bad "the removal was logged $(grep -cF "subagent-stop agent-$A1 $W1 removed" "$LOG") times"
+elif [ -e "$MAIN/$SWEEP_LOCK" ]; then bad "the lock directory was left behind"
+else ok; fi
+
 CASE="the sweep never tears down a worktree it keeps"
 FIX_TEARDOWN=1 make_repo
 create "agent-$A1"; W1=$OUT
@@ -942,6 +995,28 @@ run_cmd "$(hook_cmd WorktreeRemove worktree-remove)" "$MAIN" "$(jq -nc --arg p "
 if   [ "$c_rc" -ne 0 ] || [ "$c_out" != "$W" ]; then bad "create: rc $c_rc, stdout $c_out"
 elif [ "$s_rc" -ne 0 ] || [ -n "$s_out" ];       then bad "stop: rc $s_rc"
 elif [ "$RC" -ne 0 ] || registered "$W";          then bad "remove: rc $RC, or the worktree is still registered"
+else ok; fi
+
+# macOS's /bin/bash 3.2 runs the hooks when no newer bash comes first in PATH.
+B3=$ROOT/bash3
+mkdir -p "$B3" && bash3_stub "$B3"
+CASE="bash3_silent: under bash 3.2 create and remove fail naming bash 4, and stop says nothing"
+make_repo
+create kept; W=$OUT
+W3=$(wt_path b3)
+HOOK_PATH=$B3:$HOOK_PATH run_cmd "$(hook_cmd WorktreeCreate worktree-create)" "$MAIN" "$(jq -nc --arg c "$MAIN" \
+    '{session_id:"s1",transcript_path:"/dev/null",cwd:$c,hook_event_name:"WorktreeCreate",name:"b3"}')"
+c_rc=$RC c_out=$OUT c_err=$ERR
+HOOK_PATH=$B3:$HOOK_PATH run_cmd "$(hook_cmd SubagentStop worktree-subagent-stop)" "$MAIN" "$(jq -nc --arg c "$MAIN" \
+    '{session_id:"s1",transcript_path:"/dev/null",cwd:$c,hook_event_name:"SubagentStop",stop_hook_active:false,agent_id:"none",agent_type:"general-purpose"}')"
+s_rc=$RC s_out=$OUT s_err=$ERR
+HOOK_PATH=$B3:$HOOK_PATH run_cmd "$(hook_cmd WorktreeRemove worktree-remove)" "$MAIN" "$(jq -nc --arg p "$W" --arg c "$MAIN" \
+    '{session_id:"s1",transcript_path:"/dev/null",cwd:$c,hook_event_name:"WorktreeRemove",worktree_path:$p}')"
+if   [ "$c_rc" -eq 0 ] || [ -n "$c_out" ] || [ -e "$W3" ]; then bad "create: rc $c_rc, stdout $c_out"
+elif [ "$(wc -l <<<"$c_err")" != 1 ] || [[ $c_err != *"needs bash 4"* ]]; then bad "create should say in one line that it needs bash 4: $c_err"
+elif [ "$s_rc" -ne 0 ] || [ -n "$s_out" ] || [ -n "$s_err" ]; then bad "stop: rc $s_rc, stdout $s_out, stderr $s_err"
+elif [ "$RC" -eq 0 ] || ! registered "$W"; then bad "remove: rc $RC, or the worktree went"
+elif [ "$(wc -l <<<"$ERR")" != 1 ] || [[ $ERR != *"needs bash 4"* ]]; then bad "remove should say in one line that it needs bash 4: $ERR"
 else ok; fi
 
 # --- summary ----------------------------------------------------------------------

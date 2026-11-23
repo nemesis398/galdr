@@ -50,6 +50,22 @@
 #
 # One line per run goes to ${XDG_STATE_HOME:-~/.local/state}/galdr/worktree-hooks.log:
 #   <time> create <name> <path> <created|resumed|failed> <seconds>s [reason]
+#
+# macOS: it runs on the BSD userland as well as on GNU. The log time comes
+# from bash's own strftime instead of date -Is, the fetch limits from limit
+# (gtimeout or timeout where there is one, else a bash fallback), FETCH_HEAD's
+# age from mtime (GNU or BSD stat), the main checkout from cd -P instead of
+# realpath -e, and the copy keeps the mode with cp -p instead of GNU's
+# --preserve=mode.
+
+# macOS's /bin/bash is 3.2, which runs this hook when no newer bash comes
+# first in PATH. It lacks bash 4 features the hook uses, so the guard is
+# written for bash 3.2 too, and the hook fails in one line rather than
+# halfway: Claude Code shows the reason.
+if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 404)); then
+    echo "worktree-create: needs bash 4.4 or newer, and this is bash ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}; put Homebrew's bash first in PATH" >&2
+    exit 1
+fi
 
 set -uo pipefail
 
@@ -60,8 +76,10 @@ name="" path="" main="" branch=""
 created_wt=0 created_branch=0 child=""
 
 log() {
+    local t
+    printf -v t '%(%Y-%m-%dT%H:%M:%S%z)T' -1
     mkdir -p -- "${log_file%/*}" 2>/dev/null
-    printf '%s create %s %s %s %ss%s\n' "$(date -Is)" "${name:--}" "${path:--}" \
+    printf '%s create %s %s %s %ss%s\n' "${t:0:-2}:${t: -2}" "${name:--}" "${path:--}" \
         "$1" "$SECONDS" "${2:+ $2}" >>"$log_file" 2>/dev/null
 }
 
@@ -76,6 +94,77 @@ rollback() {
 }
 
 # fail <reason>: undo, log, and end with the reason as the last stderr line.
+# limit <kill-after> <seconds> <command...>: GNU timeout's contract on GNU
+# and BSD userlands. With gtimeout (Homebrew coreutils) or timeout, that runs
+# in the background, where it leads a process group of its own, and the hook
+# waits for it alone; when it returns, what is left of the group is killed:
+# uutils timeout (Ubuntu 26.04) sends its SIGKILL to the command alone. With
+# neither, the command runs as a process group of its own (set -m); at the
+# limit the whole group gets SIGTERM, then SIGKILL <kill-after> seconds later
+# (0: never), and once the command is done, what is left of the group is
+# killed as well. Exits 124 after SIGTERM, 137 after SIGKILL, else with the
+# command's own status. The fallback needs sleep and bash 5.1 (wait -p);
+# without either the command runs without a limit. A background command reads
+# /dev/null, so give it its stdin by redirection.
+# worktree-remove.sh, worktree-subagent-stop.sh and
+# session-preflight.sh carry the same function.
+limit() {
+    local k=$1 s=$2 t pid spid fin rc
+    shift 2
+    if t=$(type -P gtimeout || type -P timeout); then
+        "$t" -k "$k" "$s" "$@" &
+        pid=$!
+        wait "$pid" 2>/dev/null # no "Killed" job notice on the hook's stderr
+        rc=$?
+        kill -KILL -- "-$pid" 2>/dev/null
+        return "$rc"
+    fi
+    if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 501)) || ! type -P sleep >/dev/null; then
+        "$@"
+        return
+    fi
+    set -m
+    "$@" &
+    pid=$!
+    set +m
+    sleep "$s" >/dev/null 2>&1 &
+    spid=$!
+    wait -n -p fin "$pid" "$spid" 2>/dev/null
+    rc=$?
+    if [[ $fin == "$pid" ]]; then
+        kill "$spid" 2>/dev/null
+        wait "$spid" 2>/dev/null
+        kill -KILL -- "-$pid" 2>/dev/null
+        return "$rc"
+    fi
+    kill -TERM -- "-$pid" 2>/dev/null
+    rc=124
+    if ((k > 0)); then
+        sleep "$k" >/dev/null 2>&1 &
+        spid=$!
+        wait -n -p fin "$pid" "$spid" 2>/dev/null
+        if [[ $fin == "$pid" ]]; then
+            kill "$spid" 2>/dev/null
+            wait "$spid" 2>/dev/null
+            kill -KILL -- "-$pid" 2>/dev/null
+            return 124
+        fi
+        kill -KILL -- "-$pid" 2>/dev/null
+        rc=137
+    fi
+    wait "$pid" 2>/dev/null
+    return "$rc"
+}
+
+# mtime <file>: its modification time in epoch seconds. GNU stat spells it
+# -c %Y, BSD stat (macOS) -f %m; the first call finds out which one is here.
+mtime() {
+    if [[ -z ${stat_mtime+set} ]]; then
+        if stat -c %Y / >/dev/null 2>&1; then stat_mtime=(-c %Y); else stat_mtime=(-f %m); fi
+    fi
+    stat "${stat_mtime[@]}" -- "$1" 2>/dev/null
+}
+
 fail() {
     trap - TERM INT HUP
     cd / || true
@@ -147,7 +236,7 @@ base_ref_setting() {
 # substitution, so anything else it lets through to stdout would become part
 # of the base.
 pick_base() {
-    local d mtime ref
+    local d fetched ref now
     if [[ $(base_ref_setting) == head ]]; then
         git -C "$cwd" rev-parse --verify -q 'HEAD^{commit}' || fail "worktree.baseRef is head, but $cwd has no HEAD commit"
         return
@@ -157,15 +246,16 @@ pick_base() {
         d=$(default_branch)
         if git -C "$main" show-ref --verify -q "refs/remotes/origin/$d"; then
             ref=origin/$d
-            mtime=$(stat -c %Y -- "$common/FETCH_HEAD" 2>/dev/null) || mtime=0
-            if (($(date +%s) - mtime > 86400)); then
-                GIT_TERMINAL_PROMPT=0 timeout 5 git -C "$main" fetch origin "$d" </dev/null >&2 ||
+            fetched=$(mtime "$common/FETCH_HEAD") || fetched=0
+            printf -v now '%(%s)T' -1
+            if ((now - fetched > 86400)); then
+                GIT_TERMINAL_PROMPT=0 limit 0 5 git -C "$main" fetch origin "$d" </dev/null >&2 ||
                     printf 'worktree-create: refreshing origin/%s failed, using the local copy\n' "$d" >&2
             fi
         else
             # The built-in waits for this first fetch without a limit; a hung
             # remote should not hold the hook to its timeout, so 60 s.
-            if GIT_TERMINAL_PROMPT=0 timeout 60 git -C "$main" fetch origin "$d" </dev/null >&2 &&
+            if GIT_TERMINAL_PROMPT=0 limit 0 60 git -C "$main" fetch origin "$d" </dev/null >&2 &&
                 git -C "$main" show-ref --verify -q "refs/remotes/origin/$d"; then
                 ref=origin/$d
             else
@@ -210,7 +300,9 @@ copy_included() {
             printf 'worktree-create: not copying %s: the worktree already has it\n' "$rel" >&2
             continue
         fi
-        if ! mkdir -p -- "$path/$sub" || ! cp --preserve=mode -- "$main/$rel" "$path/$rel"; then
+        # cp -p keeps the mode on GNU and BSD alike (and the times, which do no
+        # harm); GNU's --preserve=mode does not exist on macOS.
+        if ! mkdir -p -- "$path/$sub" || ! cp -p -- "$main/$rel" "$path/$rel"; then
             fail "copying $rel from .worktreeinclude failed"
         fi
         n=$((n + 1))
@@ -262,7 +354,8 @@ provision() {
     [[ -n $cwd && -d $cwd ]] || fail "cwd is not a directory: ${cwd:-(none)}"
     common=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) ||
         fail "not a git repository: $cwd"
-    main=$(realpath -e -- "${common%/*}") || fail "cannot resolve the main checkout of $cwd"
+    # realpath -e without realpath, which older macOS lacks and newer has without -e.
+    main=$(CDPATH='' cd -P -- "${common%/*}" && pwd -P) || fail "cannot resolve the main checkout of $cwd"
     [[ $(git -C "$main" rev-parse --show-toplevel 2>/dev/null) == "$main" ]] ||
         fail "cannot find the main checkout of $cwd (git dir $common); bare repositories, submodules and separate git dirs are not supported"
     path=$main/.claude/worktrees/$flat

@@ -36,6 +36,18 @@
 #
 # One line per run goes to ${XDG_STATE_HOME:-~/.local/state}/galdr/worktree-hooks.log:
 #   <time> remove <name> <path> <removed|gone|failed> <seconds>s [note]
+#
+# macOS: as in worktree-create.sh, the log time comes from bash's strftime and
+# the teardown's limit from limit, so neither GNU date nor timeout is needed.
+
+# macOS's /bin/bash is 3.2, which runs this hook when no newer bash comes
+# first in PATH. It lacks bash 4 features the hook uses, so the guard is
+# written for bash 3.2 too, and the hook fails in one line rather than
+# halfway: Claude Code shows the reason.
+if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 404)); then
+    echo "worktree-remove: needs bash 4.4 or newer, and this is bash ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}; put Homebrew's bash first in PATH" >&2
+    exit 1
+fi
 
 set -uo pipefail
 
@@ -46,9 +58,72 @@ log_file="${XDG_STATE_HOME:-$HOME/.local/state}/galdr/worktree-hooks.log"
 wt="" td_note=""
 
 log() {
+    local t
+    printf -v t '%(%Y-%m-%dT%H:%M:%S%z)T' -1
     mkdir -p -- "${log_file%/*}" 2>/dev/null
-    printf '%s remove %s %s %s %ss%s\n' "$(date -Is)" "${wt:+${wt##*/}}" "${wt:--}" \
+    printf '%s remove %s %s %s %ss%s\n' "${t:0:-2}:${t: -2}" "${wt:+${wt##*/}}" "${wt:--}" \
         "$1" "$SECONDS" "${2:+ $2}" >>"$log_file" 2>/dev/null
+}
+
+# limit <kill-after> <seconds> <command...>: GNU timeout's contract on GNU
+# and BSD userlands. With gtimeout (Homebrew coreutils) or timeout, that runs
+# in the background, where it leads a process group of its own, and the hook
+# waits for it alone; when it returns, what is left of the group is killed:
+# uutils timeout (Ubuntu 26.04) sends its SIGKILL to the command alone. With
+# neither, the command runs as a process group of its own (set -m); at the
+# limit the whole group gets SIGTERM, then SIGKILL <kill-after> seconds later
+# (0: never), and once the command is done, what is left of the group is
+# killed as well. Exits 124 after SIGTERM, 137 after SIGKILL, else with the
+# command's own status. The fallback needs sleep and bash 5.1 (wait -p);
+# without either the command runs without a limit. A background command reads
+# /dev/null, so give it its stdin by redirection.
+# worktree-create.sh carries the same function.
+limit() {
+    local k=$1 s=$2 t pid spid fin rc
+    shift 2
+    if t=$(type -P gtimeout || type -P timeout); then
+        "$t" -k "$k" "$s" "$@" &
+        pid=$!
+        wait "$pid" 2>/dev/null # no "Killed" job notice on the hook's stderr
+        rc=$?
+        kill -KILL -- "-$pid" 2>/dev/null
+        return "$rc"
+    fi
+    if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 501)) || ! type -P sleep >/dev/null; then
+        "$@"
+        return
+    fi
+    set -m
+    "$@" &
+    pid=$!
+    set +m
+    sleep "$s" >/dev/null 2>&1 &
+    spid=$!
+    wait -n -p fin "$pid" "$spid" 2>/dev/null
+    rc=$?
+    if [[ $fin == "$pid" ]]; then
+        kill "$spid" 2>/dev/null
+        wait "$spid" 2>/dev/null
+        kill -KILL -- "-$pid" 2>/dev/null
+        return "$rc"
+    fi
+    kill -TERM -- "-$pid" 2>/dev/null
+    rc=124
+    if ((k > 0)); then
+        sleep "$k" >/dev/null 2>&1 &
+        spid=$!
+        wait -n -p fin "$pid" "$spid" 2>/dev/null
+        if [[ $fin == "$pid" ]]; then
+            kill "$spid" 2>/dev/null
+            wait "$spid" 2>/dev/null
+            kill -KILL -- "-$pid" 2>/dev/null
+            return 124
+        fi
+        kill -KILL -- "-$pid" 2>/dev/null
+        rc=137
+    fi
+    wait "$pid" 2>/dev/null
+    return "$rc"
 }
 
 fail() {
@@ -82,20 +157,15 @@ teardown() {
         printf 'worktree-remove: %s is not an executable file, not running it\n' "$td" >&2
         return 0
     fi
-    # In the background so the hook knows timeout's pid, which is also its
-    # process group: uutils timeout (Ubuntu 26.04) sends its SIGKILL to the
-    # teardown alone, so what is left of the group is killed here.
-    (cd -- "$wt" && exec timeout -k 5 "$teardown_limit" env WORKTREE_MAIN="$main" \
-        WORKTREE_PATH="$wt" WORKTREE_NAME="${name//+//}" "$td") </dev/null &
-    local pid=$!
-    wait "$pid" 2>/dev/null # no "Killed" job notice on the hook's stderr
+    # limit kills what is left of the teardown's process group when it returns.
+    (cd -- "$wt" && limit 5 "$teardown_limit" env WORKTREE_MAIN="$main" \
+        WORKTREE_PATH="$wt" WORKTREE_NAME="${name//+//}" "$td") </dev/null
     rc=$?
-    kill -KILL -- "-$pid" 2>/dev/null
     if ((rc == 0)); then
         td_note="teardown ran"
         return 0
     fi
-    # timeout exits 124 after SIGTERM, 137 when it had to send SIGKILL.
+    # limit exits 124 after SIGTERM, 137 when it had to send SIGKILL.
     if ((rc == 124 || rc == 137)); then
         why="timed out after $teardown_limit s"
     else

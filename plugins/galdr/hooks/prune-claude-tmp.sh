@@ -44,9 +44,19 @@
 # root, else nothing.
 # Tests: tests/prune-claude-tmp.test.sh, run with bash and no arguments.
 
+# macOS's /bin/bash is 3.2, which runs this hook when no newer bash comes
+# first in PATH. It lacks bash 4 features the hook uses, so the guard is
+# written for bash 3.2 too, and the hook does nothing rather than fail
+# halfway.
+if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 404)); then exit 0; fi
+
 set -u
 
 command -v jq >/dev/null || exit 0
+
+# Without /proc (macOS, or a container without it) it can see neither busy
+# folders nor mounts, so it leaves before it looks at anything.
+[[ -r /proc/self/mountinfo ]] || exit 0
 
 # refuse <why>: says in one line why nothing was pruned, and stops.
 refuse() {
@@ -107,7 +117,6 @@ mark() {
         busy[$first/${rest%%/*}]=1
     fi
 }
-[[ -r /proc/self/mountinfo ]] || exit 0
 while IFS= read -r -d '' target; do
     [[ $target == "$root"/* ]] && mark "$target"
 done < <(find /proc/[0-9]*/fd /proc/[0-9]*/cwd -maxdepth 1 -lname "$root/*" -printf '%l\0' 2>/dev/null)

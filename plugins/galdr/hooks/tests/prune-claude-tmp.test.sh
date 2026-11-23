@@ -10,6 +10,8 @@
 # throwaway tree at once: no case can reach the /tmp of the machine, and the
 # suite refuses to start unless /tmp is its own tmpfs and id -u is FAKE_UID.
 # Without unprivileged user namespaces it cannot run, and fails saying so.
+# Off Linux (macOS) it skips with one line: the hook prunes only where /proc
+# is, and the suite needs Linux namespaces besides.
 #
 # The cases with a mount, and the one without /proc, nest two namespaces
 # more (in_mount_ns): the third, as its root, mounts, and the fourth runs the
@@ -32,6 +34,12 @@ HOOK=${SELF%/*/*}/prune-claude-tmp.sh
 FAKE_UID=3999999
 MARK=.prune-claude-tmp-test
 [ -f "$HOOK" ] || { echo "missing $HOOK" >&2; exit 2; }
+if [[ $(uname -s) != Linux ]]; then
+    echo "prune-claude-tmp.test.sh: skipped, it needs Linux (namespaces and /proc)"
+    exit 0
+fi
+# shellcheck source=/dev/null
+. "${SELF%/*}/lib/bsd-shims.sh"
 for tool in env jq find touch sleep date du rm mkdir wc stat id mount unshare; do
     type -P "$tool" >/dev/null || { echo "the tests need $tool, which is not installed" >&2; exit 2; }
 done
@@ -385,6 +393,22 @@ CASE="without /proc it sees neither busy folders nor mounts, so nothing is prune
 check '[[ -e /tmp/claude-0/-proj/dead ]] && silent'
 rm -rf -- /tmp/claude-0
 
+# As a Mac would see it: no /proc, and a BSD stat that refuses -c. A root of
+# mode 755 would be refused on Linux; here the hook leaves before it looks.
+fresh
+BSD_TOOLS=$ROOT/bsd-tools
+rm -rf -- "$BSD_TOOLS" && cp -a -- "$TOOLS" "$BSD_TOOLS" && bsd_shims "$BSD_TOOLS"
+rm -rf -- /tmp/claude-0
+mkdir -m 755 /tmp/claude-0 && mkdir -p /tmp/claude-0/-proj/dead && age old /tmp/claude-0
+printf '{}' >"$ROOT/in"
+unshare -rm "$BASH" -c 'mount -t tmpfs tmpfs /proc || exit 99; exec "$@"' without-proc \
+    "$ENV_BIN" -i PATH="$BSD_TOOLS" HOME="$ROOT/home" "$BASH" "$HOOK" <"$ROOT/in" >"$ROOT/out" 2>"$ROOT/err"
+RC=$? OUT=$(<"$ROOT/out") ERR=$(<"$ROOT/err")
+[[ $RC != 99 ]] || ERR="cannot hide /proc in a user namespace: $ERR"
+CASE="prune_off_without_proc: without /proc it exits 0, says nothing and touches nothing"
+check '[[ -e /tmp/claude-0/-proj/dead && ! -e $ROOT/home/.local ]] && silent'
+rm -rf -- /tmp/claude-0
+
 # --- the root -------------------------------------------------------------------
 
 # Every refusal case is a dry run as well, so a hook that lost its guard
@@ -594,6 +618,17 @@ printf '%s' "{\"session_id\":\"$SID\",\"hook_event_name\":\"SessionStart\"}" >"$
 RC=$? OUT=$(<"$ROOT/out") ERR=$(<"$ROOT/err")
 CASE="plugin-root-space: hooks.json runs it once at SessionStart, quoted, and it prunes"
 check '[[ $CMD == "$WANT" ]] && gone -proj/dead && said 1 && logged 1'
+
+# macOS's /bin/bash 3.2 runs the hook when no newer bash comes first in PATH.
+fresh
+make -proj/dead
+mkdir -p "$ROOT/bash3" && bash3_stub "$ROOT/bash3"
+printf '{"session_id":"%s"}' "$SID" >"$ROOT/in"
+"$ENV_BIN" -i PATH="$TOOLS" HOME="$ROOT/home" "$ROOT/bash3/bash" "$HOOK" \
+    <"$ROOT/in" >"$ROOT/out" 2>"$ROOT/err"
+RC=$? OUT=$(<"$ROOT/out") ERR=$(<"$ROOT/err")
+CASE="bash3_silent: under bash 3.2 it exits 0, says nothing and prunes nothing"
+check 'kept -proj/dead && silent && [[ ! -e $LOG ]]'
 
 # --- summary ----------------------------------------------------------------------
 

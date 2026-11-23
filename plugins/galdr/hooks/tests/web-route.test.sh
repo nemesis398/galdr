@@ -24,6 +24,9 @@
 # The hang case holds the probe open and asserts a lower bound on the elapsed
 # time. A refused port fails at once and would pass whatever the limit was.
 #
+# Every case runs once per userland of lib/bsd-shims.sh: GNU, BSD (macOS
+# without coreutils) and BSD with Homebrew's g-tools.
+#
 # Run:  bash web-route.test.sh          (exit 0 = all green)
 # WEB_ROUTE_UNDER_TEST=<file> tests another copy, for mutation runs.
 # The sandbox lives under ${TMPDIR:-/tmp} and is removed on exit.
@@ -38,6 +41,9 @@ SELF=$(readlink -f "$0")
 HOOK=${WEB_ROUTE_UNDER_TEST:-${SELF%/*/*}/web-route.sh}
 HOOK=$(readlink -f "$HOOK")
 [ -f "$HOOK" ] || { echo "missing $HOOK" >&2; exit 2; }
+# shellcheck source=/dev/null
+. "${SELF%/*}/lib/bsd-shims.sh"
+bsd_each_userland "$SELF" "$@"
 
 SB=$(mktemp -d "${TMPDIR:-/tmp}/web-route-test.XXXXXX")
 SERVER_PID=""
@@ -59,6 +65,7 @@ for t in bash env curl jq mkdir mv rm; do
     p=$(type -P "$t") || { echo "the tests need $t, which is not installed" >&2; exit 2; }
     ln -s "$p" "$SYS/$t"
 done
+bsd_apply "$SYS" || exit 2
 type -P python3 >/dev/null || { echo "the tests need python3" >&2; exit 2; }
 # The stubs start with the bash that runs the tests: the Nix build sandbox
 # has no /usr/bin/env.
@@ -376,6 +383,16 @@ out=$(printf '%s' "$(search q)" | env -i HOME="$SB/home" PATH="$STUBS:$SYS" \
     bash -c "$cmd" 2>"$SB/err")
 rc=$? err=$(<"$SB/err")
 check "plugin-root-space: run as hooks.json writes it, it routes" '[[ $rc == 0 && -z $err && $out == *deny* ]]'
+
+# macOS's /bin/bash 3.2 runs the hook when no newer bash comes first in PATH.
+mkdir -p "$SB/bash3" && bash3_stub "$SB/bash3"
+reset
+out=$(printf '%s' "$(search q)" | env -i HOME="$SB/home" PATH="$SB/bash3:$STUBS:$SYS" \
+    XDG_STATE_HOME="$SB/state" SEARXNG_URL="$URL" CLAUDE_PLUGIN_ROOT="$SPACE" \
+    "$BASH" -c "$cmd" 2>"$SB/err")
+rc=$? err=$(<"$SB/err")
+check "bash3_silent: under bash 3.2 it exits 0, says nothing and probes nothing" \
+    '[[ $rc == 0 && -z $out && -z $err && ! -s $SB/probes.log ]]'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

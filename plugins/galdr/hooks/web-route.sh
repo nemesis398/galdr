@@ -46,6 +46,12 @@
 #
 # Tests: tests/web-route.test.sh, run with bash and no arguments.
 
+# macOS's /bin/bash is 3.2, which runs this hook when no newer bash comes
+# first in PATH. It lacks bash 4 features the hook uses, so the guard is
+# written for bash 3.2 too, and the hook does nothing rather than fail
+# halfway.
+if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 404)); then exit 0; fi
+
 set -u
 
 state=${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/web-route

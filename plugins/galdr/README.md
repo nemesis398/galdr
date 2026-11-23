@@ -28,6 +28,11 @@ a space in its path works.
 
 Each script's header says why it exists and what it does in each case.
 `jq`, `curl`, `git`, `netbird`, `pnpm`, `npm` and `uv` come from your PATH.
+The hooks run on Linux and on macOS, where they need Homebrew's bash 4.4 or
+newer first in PATH; Homebrew's `coreutils` is optional. Under macOS's own
+bash 3.2 each hook exits at once without a word, except the two worktree
+hooks, which fail naming the bash they need. `prune-claude-tmp` prunes only
+where `/proc` is, so on macOS it does nothing.
 `searx` is an optional command-line client for a SearXNG instance (ravnix ships
 one as packages/searx). A hook whose tool is missing stays silent, except
 `worktree-create`: a lockfile whose tool is missing makes the worktree fail.
@@ -114,5 +119,9 @@ Each script has a test beside it, run with bash and no arguments:
 for t in plugins/galdr/*/tests/*.test.sh; do bash "$t" || echo "FAIL $t"; done
 ```
 
-`prune-claude-tmp.test.sh` needs unprivileged user namespaces, and
+The hook tests run each case three times: with the GNU tools, as macOS
+without `coreutils` (BSD `stat` and `date`, no `timeout`, `setsid` or
+`flock`), and as macOS with it; `tests/lib/bsd-shims.sh` plays the two Macs.
+`prune-claude-tmp.test.sh` needs Linux, where it needs unprivileged user
+namespaces, and skips elsewhere;
 `web-route.test.sh` needs `python3` for its fake server.
