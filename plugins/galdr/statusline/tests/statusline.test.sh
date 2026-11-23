@@ -75,13 +75,17 @@ TAG=$'\e[7;95m' YELLOW=$'\e[33m' RED=$'\e[1;31m' RESET=$'\e[0m'
 # TZ= or GALDR_CONFIG= overrides the default. PARENT_KIND, when
 # set, goes into the parent's environment only, which is where Claude Code
 # leaves CLAUDE_CODE_SESSION_KIND, as do the NAME=value pairs of PARENT_EXTRA. TZDIR passes through when it is set, as
-# in the Nix build sandbox, which has no /usr/share/zoneinfo.
+# in the Nix build sandbox, which has no /usr/share/zoneinfo. PARENT_PRE,
+# when set, names a file the parent sources first: its $$ is the script's
+# $PPID, so it can lay out a fake /proc entry for the parent.
 run_sl() {
     local input=$1
     shift
     printf '%s' "$input" >"$ROOT/in"
+    # The parent's script is single-quoted, so its $ expand in the parent.
+    # shellcheck disable=SC2016
     "$ENV_BIN" -i ${PARENT_KIND:+"CLAUDE_CODE_SESSION_KIND=$PARENT_KIND"} ${PARENT_EXTRA[@]+"${PARENT_EXTRA[@]}"} \
-        "$BASH" -c '"$@"; exit $?' parent \
+        "$BASH" -c 'pre=$1; shift; [ -z "$pre" ] || . "$pre"; "$@"; exit $?' parent "${PARENT_PRE:-}" \
         "$ENV_BIN" -i PATH="$WITH_JQ" TZ=UTC ${TZDIR:+"TZDIR=$TZDIR"} \
         GALDR_CONFIG="$ROOT/values.json" "$@" "$BASH" "$SL" \
         <"$ROOT/in" >"$ROOT/out" 2>"$ROOT/err"
@@ -595,6 +599,7 @@ printf 'ref: refs/heads/main\n' >"$H/proj/.git/HEAD"
 printf '0123456789abcdef0123456789abcdef01234567\n' >"$H/det/.git/HEAD"
 printf 'ref: refs/heads/feature/x\n' >"$H/wt-main/.git/worktrees/x/HEAD"
 printf 'gitdir: %s\n' "$H/wt-main/.git/worktrees/x" >"$H/wt/.git"
+printf '../..\n' >"$H/wt-main/.git/worktrees/x/commondir"
 
 CASE="two lines: the budget line without the session id, then the project and the branch"
 run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H"
@@ -637,6 +642,24 @@ printf 'junk\n' >"$H/plain/.git"
 run_sl "$(placed "$H/plain" "$H/plain")" HOSTNAME=laptop HOME="$H"
 expect "$BODY"$'\n'"~/plain"
 rm -f -- "$H/plain/.git"
+
+CASE="a .git file whose gitdir points nowhere: no branch, stderr empty"
+printf 'gitdir: %s\n' "$H/no-such-gitdir" >"$H/plain/.git"
+run_sl "$(placed "$H/plain" "$H/plain")" HOSTNAME=laptop HOME="$H"
+expect "$BODY"$'\n'"~/plain"
+rm -f -- "$H/plain/.git"
+
+CASE="a .git directory with no HEAD: no branch, stderr empty"
+mkdir -p "$H/nohead/.git"
+run_sl "$(placed "$H/nohead" "$H/nohead")" HOSTNAME=laptop HOME="$H"
+expect "$BODY"$'\n'"~/nohead"
+
+CASE="a submodule (.git file into the parent's modules, no commondir): branch without wt"
+mkdir -p "$H/super/.git/modules/x" "$H/super/x"
+printf 'ref: refs/heads/sub\n' >"$H/super/.git/modules/x/HEAD"
+printf 'gitdir: ../.git/modules/x\n' >"$H/super/x/.git"
+run_sl "$(placed "$H/super/x" "$H/super/x")" HOSTNAME=laptop HOME="$H"
+expect "$BODY"$'\n'"~/super/x · sub"
 
 CASE="bg puts the first 8 characters of the session id at the front of line 2"
 PARENT_KIND='bg' run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H"
@@ -896,17 +919,17 @@ WB="$BODY"$'\n'"~/proj · main"
 cfg() { values '{"statusline":{"quietHosts":["laptop"]'"$1"'}}'; }
 
 CASE="env missing: a name the parent lacks gives the hint"
-cfg ',"requiredEnv":["A","B"],"requiredEnvHint":"ai-unlock"'
+cfg ',"requiredEnv":["A","B"],"requiredEnvHint":"unlock-tokens"'
 PARENT_EXTRA=(A=1)
 slw "$WP"
-expect "$WB · ⚠ ai-unlock"
+expect "$WB · ⚠ unlock-tokens"
 
 CASE="env missing without a hint: ⚠ env"
 cfg ',"requiredEnv":["A","B"]'
 slw "$WP"
 expect "$WB · ⚠ env"
 
-CASE="env empty: a name set to nothing counts as missing, as ai-unlock-style loaders treat it"
+CASE="env empty: a name set to nothing counts as missing, as unlock-style loaders treat it"
 PARENT_EXTRA=(A=1 B=)
 slw "$WP"
 expect "$WB · ⚠ env"
@@ -918,17 +941,17 @@ expect "$WB"
 PARENT_EXTRA=()
 
 CASE="a field after ssh_labels keeps its place when the label list is empty"
-cfg ',"requiredEnv":["A"],"requiredEnvHint":"ai-unlock"'
+cfg ',"requiredEnv":["A"],"requiredEnvHint":"unlock-tokens"'
 slw "$WP"
-expect "$WB · ⚠ ai-unlock"
+expect "$WB · ⚠ unlock-tokens"
 
 CASE="a field after ssh_labels still lines up when the labels are there"
-cfg ',"sshHosts":{"forgejo":"git.example.org"},"requiredEnv":["A"],"requiredEnvHint":"ai-unlock","tmp":{"path":"/var"}'
+cfg ',"sshHosts":{"forgejo":"git.example.org"},"requiredEnv":["A"],"requiredEnvHint":"unlock-tokens","tmp":{"path":"/var"}'
 rm -rf -- "$WSTATE"; mkdir -p "$WSTATE/galdr"
 sockets_w() { printf '%s\n' "$@" >"$WSTATE/galdr/ssh-sockets"; }
 sockets_w "forgejo"$'\t'"$SOCK"
 run_sl "$WP" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$WSTATE" GALDR_CONFIG="$ROOT/v.json"
-expect "$WB · 🔑 forgejo ✓ · ⚠ ai-unlock"
+expect "$WB · 🔑 forgejo ✓ · ⚠ unlock-tokens"
 
 # A fake /proc: <pid>/comm and a cwd link, as the kernel has them.
 FP=$ROOT/fakeproc
@@ -956,10 +979,28 @@ expect "$WB"
 slw "$WP" GALDR_PROC="$ROOT/no-such-proc"
 expect "$WB"
 
-CASE="requiredEnv is off without /proc, silently"
+CASE="sessions here: the parent, a claude in the project itself, is skipped"
+fakeproc
+printf 'mkdir -p %q/$$; printf "claude\\n" >%q/$$/comm; ln -s %q %q/$$/cwd\n' \
+    "$FP" "$FP" "$H/proj" "$FP" >"$ROOT/pre.sh"
+PARENT_PRE=$ROOT/pre.sh slw "$WP" GALDR_PROC="$FP"
+expect "$WB"
+[ -f "$(printf '%s\n' "$FP"/[0-9]*/comm | head -n 1)" ] || bad "the prelude made no fake parent"
+
+CASE="the parent's environment comes from GALDR_PROC: a fake environ gives bg and ⚠ env"
 cfg ',"requiredEnv":["A"]'
-slw "$WP" GALDR_PROC="$ROOT/no-such-proc"
-expect "$WB · ⚠ env"
+fakeproc
+printf 'mkdir -p %q/$$; printf "CLAUDE_CODE_SESSION_KIND=bg\\0B=1\\0" >%q/$$/environ\n' \
+    "$FP" "$FP" >"$ROOT/pre.sh"
+PARENT_EXTRA=(A=1)
+PARENT_PRE=$ROOT/pre.sh slw "$WP" GALDR_PROC="$FP"
+expect "$BODY"$'\n'"bg $P_SID · ~/proj · main · ⚠ env"
+PARENT_EXTRA=()
+
+CASE="requiredEnv and the parent's session kind are off without /proc, silently"
+cfg ',"requiredEnv":["A"]'
+PARENT_KIND='bg' slw "$WP" GALDR_PROC="$ROOT/no-such-proc"
+expect "$WB"
 
 # The /tmp cache: "<epoch> <used KiB> <size KiB>". tmpc <age s> <used> <size>.
 NOW=$("$DATE_BIN" +%s)

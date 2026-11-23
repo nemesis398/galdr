@@ -101,7 +101,9 @@ the filesystem under `statusline.tmp.path`, or of `statusline.tmp.shareBytes`
 when that is set. The first two read `/proc` and are off without it, as on
 macOS. The disk figure comes from `df -Pk`, run at most every 300 s and
 cached in `${XDG_STATE_HOME:-~/.local/state}/galdr/tmp-usage`, which is the
-one process the status line starts besides `jq`.
+one process the status line starts besides `jq`. The cache needs the galdr
+state directory, which the hooks make: while it is missing, `df` runs on
+every refresh.
 
 ## The config file
 

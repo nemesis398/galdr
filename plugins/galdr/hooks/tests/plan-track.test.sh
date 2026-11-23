@@ -141,6 +141,14 @@ config "{\"plans\":{\"dir\":\"$SB/a b/plän\"}}"
 run -- "$(edit "$SID" "$SB/a b/plän/ü.md")"
 check "a plans.dir with a space and umlauts works" 'silent && recorded "$SB/a b/plän/ü.md"'
 
+reset
+config "{\"plans\":{\"dir\":\"$PLANS\"}}"
+ESCP=$PLANS/$'esc\e[2Jname.md'
+printf -- '---\n---\n' >"$ESCP"
+run -- "$(edit "$SID" "$ESCP")"
+check "ignores a real *.md in plans.dir whose name holds a control character (ESC)" 'silent && nothing'
+rm -f -- "$ESCP"
+
 # --- no plans.dir ----------------------------------------------------------
 
 for c in 'no key:{"statusline":{}}' 'a relative dir:{"plans":{"dir":"vault/plans"}}' \

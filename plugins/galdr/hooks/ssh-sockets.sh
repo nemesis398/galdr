@@ -73,6 +73,10 @@ mapfile -t entries < <(jq -nr --rawfile values "$values" "$prog" 2>/dev/null)
 work=$state/.ssh-sockets.$$
 { [[ -d $state ]] || mkdir -p -- "$state"; } 2>/dev/null || exit 0
 mkdir -- "$work" 2>/dev/null || exit 0
+# The hook's timeout ends a hung run with TERM: the work directory and the
+# temp file go with it, and the old cache stays.
+tmp=$state/.ssh-sockets.tmp.$$
+trap 'rm -rf -- "$tmp" "$work" 2>/dev/null; exit 0' TERM INT
 
 # All hosts at once, each into its own file.
 pids=()
@@ -92,7 +96,6 @@ for i in "${!entries[@]}"; do
     cache+=${entries[i]%%$'\t'*}$'\t'$path$'\n'
 done
 
-tmp=$state/.ssh-sockets.tmp.$$
 if { printf '%s' "$cache" >"$tmp"; } 2>/dev/null; then
     mv -f -- "$tmp" "$state/ssh-sockets" 2>/dev/null
 fi

@@ -214,6 +214,24 @@ run
 check "two hosts of 1 s each take under 2 s: ssh runs for all at once" \
     'silent && ((took >= 1000 && took < 1950)) && [[ $(calls) == 2 ]] \
     && cached $'"'"'a\t/x/cm-slow1.example.org\nb\t/x/cm-slow2.example.org\n'"'"
+# A TERM, as the hook timeout sends it, while ssh still runs: the hook
+# removes its own work directory and temp file, and the old cache stays.
+reset
+mkdir -p "$SB/state/galdr"
+printf 'old\t/x/old\n' >"$CACHE"
+config '{"statusline":{"sshHosts":{"a":"slow1.example.org"}}}'
+printf '{}' >"$SB/in"
+env -i HOME="$SB/home" PATH="$FAKE:$SYS" XDG_STATE_HOME="$SB/state" \
+    GALDR_CONFIG="$SB/config.json" bash "$HOOK" <"$SB/in" >"$SB/out" 2>"$SB/err" &
+hook=$!
+for _ in {1..100}; do [[ $(calls) == 0 ]] || break; sleep 0.02; done
+kill -TERM "$hook" 2>/dev/null
+wait "$hook"
+rc=$? out=$(<"$SB/out") err=$(<"$SB/err") took=-
+left=$(cd "$SB/state/galdr" && printf '%s ' .ssh-sockets.*)
+check "a TERM while ssh runs leaves no .ssh-sockets.<pid> behind, and the old cache" \
+    '[[ $(calls) == 1 && -z $out && -z $err && $left == ".ssh-sockets.* " ]] \
+    && cached $'"'"'old\t/x/old\n'"'"' || { echo "    left: $left"; false; }'
 config '{"statusline":{"sshHosts":{"github":"github.com"}}}'
 
 # --- as hooks.json runs it -------------------------------------------------

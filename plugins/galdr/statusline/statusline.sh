@@ -111,8 +111,9 @@
 #
 # Claude Code reruns this after every assistant message, shows it only on
 # exit 0, and cancels a run the next refresh overtakes. So it starts no
-# process but that one jq and always exits 0. NO_COLOR (set and not empty)
-# turns the colors off. No set -e or -u: the host must print whatever fails.
+# process but that one jq and the df above (at most every 300 s while the
+# galdr state directory exists, else on every run), and always exits 0.
+# NO_COLOR (set and not empty) turns the colors off. No set -e or -u: the host must print whatever fails.
 
 # Control characters are dropped from the name, as from the JSON below.
 host=${HOSTNAME//[[:cntrl:]]/}
@@ -131,11 +132,12 @@ values=${GALDR_CONFIG:-${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}/galdr/c
 [[ -f $values && -r $values ]] || values=/dev/null
 
 # The parent's environment is read once, for the session kind and for the
-# names requiredEnv asks about. Without /proc (macOS) env_ok stays empty and
-# the requiredEnv check is off.
+# names requiredEnv asks about, from ${GALDR_PROC:-/proc}/$PPID/environ.
+# Without /proc (macOS) env_ok stays empty, the requiredEnv check is off and
+# the kind comes from the script's own environment only.
 kind=${CLAUDE_CODE_SESSION_KIND:-}
 env_ok="" parent_names=" "
-if mapfile -d '' -t parent_env 2>/dev/null </proc/"$PPID"/environ; then
+if mapfile -d '' -t parent_env 2>/dev/null <"${GALDR_PROC:-/proc}/$PPID/environ"; then
     env_ok=1
     for kv in "${parent_env[@]}"; do
         [[ $kv == *=?* ]] && parent_names+="${kv%%=*} "
@@ -261,24 +263,28 @@ short_path() {
 }
 
 # git_branch <dir>: sets branch (name, short sha or empty) and wt (1 in a
-# linked worktree), from <dir>/.git/HEAD or the gitdir: file a worktree has.
-# It sets globals instead of printing, so no subshell is forked.
+# linked worktree), from <dir>/.git/HEAD or the gitdir: file a worktree or a
+# submodule has. Only a linked worktree's gitdir holds a commondir file, so
+# a submodule gets no wt. A gitdir or HEAD that is gone gives no branch and
+# nothing on stderr. It sets globals instead of printing, so no subshell is
+# forked.
 git_branch() {
     local d=$1 g=$1/.git head="" line=""
     branch="" wt=""
     if [[ -d $g ]]; then
         head=$g/HEAD
     elif [[ -f $g ]]; then
-        read -r line <"$g" || [[ -n $line ]]
+        { read -r line || [[ -n $line ]]; } 2>/dev/null <"$g"
         [[ $line == "gitdir: "* ]] || return 0
         line=${line#gitdir: }
         [[ $line == /* ]] || line=$d/$line
-        head=$line/HEAD wt=1
+        head=$line/HEAD
+        [[ -f $line/commondir ]] && wt=1
     else
         return 0
     fi
     line=""
-    read -r line <"$head" || [[ -n $line ]]
+    { read -r line || [[ -n $line ]]; } 2>/dev/null <"$head"
     line=${line//[[:cntrl:]]/}
     if [[ $line == "ref: refs/heads/"* ]]; then branch=${line#ref: refs/heads/}
     elif [[ $line == "ref: "* ]]; then branch=${line#ref: }
