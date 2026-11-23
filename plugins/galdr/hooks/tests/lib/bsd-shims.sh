@@ -67,8 +67,8 @@ bsd_apply() {
 # reads BSD's -f formats, and a date that refuses -d, -I and every long
 # option and reads BSD's -r <seconds>, both failing as the BSD tools do; and
 # hides timeout, setsid and flock by removing them from <dir>. With --with-g
-# it adds gstat, gtimeout and gdate, links to the GNU tools. A PATH with <dir>
-# first then looks like that Mac's to a hook.
+# it adds gstat, gtimeout and gdate, scripts that exec the GNU tools. A PATH
+# with <dir> first then looks like that Mac's to a hook.
 bsd_shims() {
     local dir=$1 with_g=${2:-} stat_bin date_bin t p
     [[ -d $dir ]] || { echo "bsd_shims: $dir is no directory" >&2; return 2; }
@@ -152,10 +152,17 @@ EOF
     } >"$dir/date"
     chmod +x "$dir/stat" "$dir/date"
 
+    # Scripts, not links: uutils coreutils (Ubuntu 26.04) is one binary that
+    # picks its tool by the name it is called by and refuses any other name,
+    # so a link named gtimeout fails before it runs ("Security violation:
+    # Requested utility `gtimeout` does not match executable name"). Homebrew's
+    # g-tools are real binaries of their own. exec keeps the pid, so what
+    # limit makes of the process group stays the same.
     if [[ $with_g == --with-g ]]; then
         for t in stat timeout date; do
             p=$(_bsd_gnu "$t") || { echo "bsd_shims: no GNU $t for g$t" >&2; return 2; }
-            ln -s -- "$p" "$dir/g$t"
+            printf '#!%s\nexec %q "$@"\n' "$BASH" "$p" >"$dir/g$t"
+            chmod +x "$dir/g$t"
         done
     fi
     return 0
