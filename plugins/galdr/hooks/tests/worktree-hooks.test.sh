@@ -741,7 +741,7 @@ age() {
 }
 
 # sweep_done <log text>: the sweep runs detached under a lock, a flock on
-# .git/worktrees where flock exists, else the directory SWEEP_LOCK. Its first
+# .git/worktrees where flock exists, else the lock file SWEEP_LOCK. Its first
 # log line proves it holds the lock; getting the lock afterwards proves it
 # has finished.
 SWEEP_LOCK=.git/galdr-worktree-sweep.lock
@@ -897,7 +897,7 @@ for _ in $(seq 1 100); do grep -qxF "teardown cwd=$W1" "$STUB_LOG" && break; sle
 if [ "$GALDR_USERLAND" = gnu ]; then
     flock -n "$MAIN/.git/worktrees" true || holders=1
 else
-    mapfile -t pids <"$MAIN/$SWEEP_LOCK/pid" 2>/dev/null
+    mapfile -t pids <"$MAIN/$SWEEP_LOCK" 2>/dev/null
     [ "${#pids[@]}" = 1 ] && kill -0 "${pids[0]}" 2>/dev/null && holders=1
 fi
 if   ! sweep_done "subagent-stop agent-$A1 $W1 removed"; then bad "no removal logged: $(reason_for "$W1")"
@@ -906,14 +906,14 @@ elif [ "$holders" != 1 ]; then bad "during the teardown the lock had no single l
 elif [ -e "$W1" ];   then bad "the worktree is still there"
 elif [ "$(grep -cxF "teardown cwd=$W1" "$STUB_LOG")" != 1 ]; then bad "the teardown ran $(grep -cxF "teardown cwd=$W1" "$STUB_LOG") times"
 elif [ "$(grep -cF "subagent-stop agent-$A1 $W1 removed" "$LOG")" != 1 ]; then bad "the removal was logged $(grep -cF "subagent-stop agent-$A1 $W1 removed" "$LOG") times"
-elif [ -e "$MAIN/$SWEEP_LOCK" ]; then bad "the lock directory was left behind"
+elif [ -e "$MAIN/$SWEEP_LOCK" ]; then bad "the lock file was left behind"
 else ok; fi
 
-# sweep_lock's takeover rules, where the sweep takes the mkdir lock.
+# sweep_lock's takeover rules, where the sweep takes the lock file.
 if [ "$GALDR_USERLAND" != gnu ]; then
-    # pre_lock <pid> [<seconds ago>]: a lock directory as a sweep leaves it.
+    # pre_lock <pid> [<seconds ago>]: a lock file as a sweep leaves it.
     pre_lock() {
-        mkdir -p "$MAIN/$SWEEP_LOCK" && printf '%s\n' "$1" >"$MAIN/$SWEEP_LOCK/pid"
+        printf '%s\n' "$1" >"$MAIN/$SWEEP_LOCK"
         [ -z "${2:-}" ] || touch -t "$(ago "$2")" "$MAIN/$SWEEP_LOCK"
     }
 
@@ -936,9 +936,9 @@ if [ "$GALDR_USERLAND" != gnu ]; then
     sleep 1
     if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
     elif (( $(wc -l <"$LOG") != lines )); then bad "a sweep ran: $(tail -n 1 "$LOG")"
-    elif [ "$(cat "$MAIN/$SWEEP_LOCK/pid" 2>/dev/null)" != "$$" ]; then bad "the live owner's lock was touched"
+    elif [ "$(cat "$MAIN/$SWEEP_LOCK" 2>/dev/null)" != "$$" ]; then bad "the live owner's lock was touched"
     else ok; fi
-    rm -rf -- "${MAIN:?}/$SWEEP_LOCK"
+    rm -f -- "${MAIN:?}/$SWEEP_LOCK"
 
     CASE="sweep_lock: a lock over an hour old is taken over, its owner alive or not"
     make_repo
@@ -949,10 +949,23 @@ if [ "$GALDR_USERLAND" != gnu ]; then
     elif ! sweep_done "subagent-stop agent-$A2 $W2 kept"; then bad "no sweep ran, or it left the lock: $(tail -n 1 "$LOG")"
     else ok; fi
 
+    # The mkdir lock this hook took before left a directory of the lock
+    # file's name, with its owner's pid inside.
+    CASE="sweep_lock: a leftover lock directory from the mkdir lock does not block the sweep"
+    make_repo
+    create "agent-$A2"; W2=$OUT
+    sh -c 'exit 0' & dead=$!; wait "$dead"
+    mkdir "$MAIN/$SWEEP_LOCK" && printf '%s\n' "$dead" >"$MAIN/$SWEEP_LOCK/pid"
+    stop "$W2" "$A2"
+    if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
+    elif ! sweep_done "subagent-stop agent-$A2 $W2 kept"; then bad "no sweep ran, or it left the lock: $(tail -n 1 "$LOG")"
+    elif [ -e "$MAIN/$SWEEP_LOCK" ]; then bad "the lock directory is still there"
+    else ok; fi
+
     # Homebrew's flock without setsid: the directory flock is util-linux's,
-    # so the sweep must take the mkdir lock. The stub refuses, as a flock
+    # so the sweep must take the lock file. The stub refuses, as a flock
     # that cannot lock a directory would.
-    CASE="flock_without_setsid: the sweep takes the mkdir lock, never flock"
+    CASE="flock_without_setsid: the sweep takes the lock file, never flock"
     FLOCK_STUB=$ROOT/flock-stub
     mkdir -p "$FLOCK_STUB"
     { printf '#!%s\n' "$BASH"; cat <<'EOF'
@@ -969,11 +982,11 @@ EOF
     TEARDOWN_SLEEP=1 HOOK_PATH=$FLOCK_STUB:$HOOK_PATH stop "$W2" "$A2"
     held=no
     for _ in $(seq 1 100); do grep -qxF "teardown cwd=$W1" "$STUB_LOG" && break; sleep 0.1; done
-    read -r lpid <"$MAIN/$SWEEP_LOCK/pid" 2>/dev/null && kill -0 "$lpid" 2>/dev/null && held=yes
+    read -r lpid <"$MAIN/$SWEEP_LOCK" 2>/dev/null && kill -0 "$lpid" 2>/dev/null && held=yes
     if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
     elif ! sweep_done "subagent-stop agent-$A1 $W1 removed"; then bad "no removal logged: $(reason_for "$W1")"
     elif grep -q '^flock' "$STUB_LOG"; then bad "flock was called: $(grep '^flock' "$STUB_LOG")"
-    elif [ "$held" != yes ]; then bad "during the teardown no live sweep held the mkdir lock"
+    elif [ "$held" != yes ]; then bad "during the teardown no live sweep held the lock file"
     else ok; fi
 fi
 

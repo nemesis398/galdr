@@ -54,7 +54,7 @@
 # same repository twice, and a stop that finds the lock taken simply skips.
 # Where setsid and flock both exist, that is setsid -f and a flock on
 # <common>/worktrees. macOS has neither, so there the sweep runs in a process
-# group of its own (set -m) and takes a mkdir lock,
+# group of its own (set -m) and takes a lock file,
 # <common>/galdr-worktree-sweep.lock, itself (sweep_lock); so does a Mac with
 # Homebrew's flock but no setsid.
 #
@@ -156,26 +156,46 @@ mtime() {
     stat "${stat_mtime[@]}" -- "$1" 2>/dev/null
 }
 
-# sweep_lock <dir>: the lock flock -n gives, for a Mac without flock. mkdir is
-# atomic, and the directory holds its owner's pid. A lock is taken over when
-# its owner is gone or it is older than an hour, so a sweep that died (a
-# crash, a reboot) does not stop every later one. Two stops that find the
-# same stale lock at the same moment may both take it over and sweep at once:
+# sweep_lock <file>: the lock flock -n gives, for a Mac without flock. bash
+# creates the file with its owner's pid under noclobber (set -C), which opens
+# it with O_CREAT|O_EXCL: of two stops at once, exactly one creates it. No
+# external tool takes part: uutils mkdir (Ubuntu 26.04) can succeed for two
+# callers at once, so the mkdir lock this hook took before let two sweeps
+# run together there.
+# A reader may find the file before its pid is in it; an empty or garbled pid
+# counts as a live owner. A lock is taken over when its owner is gone or its
+# mtime is older than an hour, so a sweep that died (a crash, a reboot) does
+# not stop every later one: the stale file is removed and created anew, and
+# a stop that loses that create skips. Two stops that find the same stale
+# lock at the same moment may still both take it over and sweep at once:
 # both can then run one worktree's teardown, so it runs twice, and one
 # `git worktree remove` is refused. A live lock means skip, as with flock -n.
+# A lock directory of the same name, left by that mkdir lock, is removed first
+# when it holds nothing but its pid file and that owner is gone or an hour
+# old; anything else in it means skip, so nothing unknown is deleted.
 # Reads now.
 sweep_lock() {
     local pid="" m
-    if ! mkdir -- "$1" 2>/dev/null; then
+    if [[ -d $1 && ! -L $1 ]]; then
         { read -r pid <"$1/pid"; } 2>/dev/null
         m=$(mtime "$1") || m=0
+        if ((now - m < 3600)) && [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
+        rm -f -- "$1/pid"
+        rm -d -- "$1" 2>/dev/null || [[ ! -e $1 ]] || return 1
+        pid=""
+    fi
+    (set -C; printf '%s\n' "$$" >"$1") 2>/dev/null && return 0
+    { read -r pid <"$1"; } 2>/dev/null
+    # No mtime: its owner removed it meanwhile, so try the create once more.
+    if m=$(mtime "$1"); then
         if ((now - m < 3600)) && { [[ ! $pid =~ ^[0-9]+$ ]] || kill -0 "$pid" 2>/dev/null; }; then
             return 1
         fi
-        rm -rf -- "$1"
-        mkdir -- "$1" 2>/dev/null || return 1
+        rm -f -- "$1"
     fi
-    printf '%s\n' "$$" >"$1/pid"
+    (set -C; printf '%s\n' "$$" >"$1") 2>/dev/null
 }
 
 # The teardown's limit, as in worktree-remove.sh. The sweep is detached, so no
@@ -274,7 +294,7 @@ consider() {
 }
 
 # The detached half: worktree-subagent-stop.sh --sweep <main> <self-top>
-# <self-name> [<lock dir>]. The lock dir comes where flock or setsid is missing.
+# <self-name> [<lock file>]. The lock file comes where flock or setsid is missing.
 if [[ ${1:-} == --sweep ]]; then
     main=$2 self=$3 self_name=$4 lock=${5:-}
     grace=${CLAUDE_WORKTREE_AGENT_GRACE_HOURS:-24}
@@ -282,7 +302,7 @@ if [[ ${1:-} == --sweep ]]; then
     printf -v now '%(%s)T' -1
     if [[ -n $lock ]]; then
         sweep_lock "$lock" || exit 0
-        trap 'rm -rf -- "$lock"' EXIT
+        trap 'rm -f -- "$lock"' EXIT
     fi
     wt="" sha="" ref="" locked=0 prunable=0
     while IFS= read -r -d '' line; do
@@ -314,7 +334,8 @@ compgen -G "$main/.claude/worktrees/agent-*" >/dev/null || exit 0
 
 sweep=("$BASH" "${BASH_SOURCE[0]}" --sweep "$main" "$top" "${agent:+agent-$agent}")
 # flock on a directory is util-linux's; it comes with setsid, and a flock
-# without one (Homebrew's on a Mac) may refuse a directory, so mkdir it is.
+# without one (Homebrew's on a Mac) may refuse a directory, so the lock file
+# it is.
 if type -P flock >/dev/null && type -P setsid >/dev/null; then
     sweep=(flock -n "$common/worktrees" "${sweep[@]}")
 else
