@@ -64,6 +64,16 @@ an update. A stale path blanks the status line without an
 error. A symbolic link at a fixed path, renewed after an update, keeps the
 setting stable.
 
+The status line prints two lines, each part only when its data exists, and
+a line with no part is not printed. Line 1 is the budget: model and effort,
+context, the 5h and weekly limits, the cache age, credits. Line 2 is place
+and work: `[host · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt]`. The
+project is `workspace.project_dir` with `$HOME` shown as `~`. `↳` follows
+when the current directory is below it (its relative path) or outside it
+(its own path). The branch is read from `.git/HEAD` (a short sha when
+detached, `wt` in a linked worktree), and nothing prints outside a
+repository. The session id (first 8 characters) shows only next to `bg`.
+
 ## The config file
 
 The hooks and the status line read their values from one JSON file:

@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # statusline.sh: the Claude Code status line (the plugin's README says how
-# to wire it as the statusLine command). Prints one line, every part
-# only when its data exists:
-#   [<host> · ][bg · ]<model> <effort> · ctx <n>% · 5h <n>% ↻<HH:MM> ·
-#   wk <n>% ↻<Mo> · <Model> <n>% ... · cache <n>m · credits <used>/<limit> € ·
-#   <short id>
+# to wire it as the statusLine command). Prints two lines, every part
+# only when its data exists, and a line with no part is not printed (with
+# neither line, one empty line is):
+#   line 1: <model> <effort> · ctx <n>% · 5h <n>% ↻<HH:MM> · wk <n>% ↻<Mo> ·
+#           <Model> <n>% ... · cache <n>m · credits <used>/<limit> €
+#   line 2: [<host> · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt]
+# The project is workspace.project_dir with $HOME as ~ (whole components
+# only). ↳ shows the current directory relative to it when below it, in
+# full when outside it. The branch comes from .git/HEAD, or from the gitdir:
+# file of a linked worktree (then wt follows), read with `read`, no git.
+# Fields reach bash tab-separated, each led by _ so that empty ones keep
+# their place. The session id is cleaned to [A-Za-z0-9-] and printed
+# (8 characters) only next to bg.
 #
 # Why: the line answers "can I keep going, and what does the next turn cost"
 # without opening /usage. The limits and the cache age are what otherwise
@@ -53,8 +61,7 @@
 #     compaction) is what the next turn rewrites. The age moves only when the
 #     script runs again, which is after a message, at expires_at, and every
 #     refreshInterval seconds if the statusLine setting has one;
-#   - the first 8 characters of session_id, the id that `claude --bg` prints
-#     and `claude attach` takes.
+#   - workspace.project_dir, workspace.current_dir and session_id for line 2.
 # Per-model weekly windows (rate_limits.model_scoped[] by display_name, then
 # seven_day_opus and seven_day_sonnet, each {utilization, resets_at}) and
 # extra_usage (amounts in minor units of its currency) are the shapes of the
@@ -156,26 +163,89 @@ def body:
   ([scoped] | reduce .[] as $e ([]; if any(.[]; .n == $e.n) then . else . + [$e] end)
       | .[] | "\(.n) \(.o | used | lim)"),
   cache,
-  credits,
-  (text(.session_id) | .[0:8])
+  credits
 ] | map(select(. != "")) | join(" · ");
 
 (try input catch null) as $in
-| "\(if quiet then "q" else "t" end)\t\($in | body)"'
-quiet="" body=""
-IFS=$'\t' read -r quiet body <<<"$(jq -nr --arg c "$color_on" --arg host "$host" \
+| [(if quiet then "q" else "t" end),
+   ($in | body),
+   ($in | text(.workspace?.project_dir)),
+   ($in | text(.workspace?.current_dir)),
+   ($in | text(.session_id) | gsub("[^A-Za-z0-9-]"; ""))]
+| map("_" + .) | join("\t")'
+# Every field leads with _, which is stripped below: read splits on a tab as
+# on white space, so an empty field would otherwise swallow its neighbour.
+fields=()
+IFS=$'\t' read -r -a fields <<<"$(jq -nr --arg c "$color_on" --arg host "$host" \
     --rawfile values "$values" "$prog" 2>/dev/null)"
+for i in 0 1 2 3 4; do fields[i]=${fields[i]#_}; done
+quiet=${fields[0]} line1=${fields[1]} project_dir=${fields[2]}
+current_dir=${fields[3]} session_id=${fields[4]}
 
-line=""
+# short_path <abs>: the path with $HOME as ~, on a whole component only, so
+# /home/user2 is not ~2 under HOME=/home/user.
+short_path() {
+    local p=$1 h=${HOME%/}
+    if [[ -n $h && $p == "$h" ]]; then printf '~'
+    elif [[ -n $h && $p == "$h"/* ]]; then printf '~%s' "/${p#"$h"/}"
+    else printf '%s' "$p"; fi
+}
+
+# git_branch <dir>: sets branch (name, short sha or empty) and wt (1 in a
+# linked worktree), from <dir>/.git/HEAD or the gitdir: file a worktree has.
+# It sets globals instead of printing, so no subshell is forked.
+git_branch() {
+    local d=$1 g=$1/.git head="" line=""
+    branch="" wt=""
+    if [[ -d $g ]]; then
+        head=$g/HEAD
+    elif [[ -f $g ]]; then
+        read -r line <"$g" || [[ -n $line ]]
+        [[ $line == "gitdir: "* ]] || return 0
+        line=${line#gitdir: }
+        [[ $line == /* ]] || line=$d/$line
+        head=$line/HEAD wt=1
+    else
+        return 0
+    fi
+    line=""
+    read -r line <"$head" || [[ -n $line ]]
+    line=${line//[[:cntrl:]]/}
+    if [[ $line == "ref: refs/heads/"* ]]; then branch=${line#ref: refs/heads/}
+    elif [[ $line == "ref: "* ]]; then branch=${line#ref: }
+    else branch=${line:0:7}; fi
+    [[ -n $branch ]] || wt=""
+}
+
+# Line 2, one part at a time, joined with " · ". Later parts append to parts.
+parts=()
 if [[ $quiet != q ]]; then
     if [[ -n $color_on ]]; then
-        line=$'\e[7;95m'$host$'\e[0m'
+        parts+=($'\e[7;95m'"$host"$'\e[0m')
     else
-        line=$host
+        parts+=("$host")
     fi
 fi
-[[ $kind == bg ]] && line+=${line:+ · }bg
-[[ -n $body ]] && line+=${line:+ · }$body
+if [[ $kind == bg ]]; then
+    parts+=("bg${session_id:+ ${session_id:0:8}}")
+fi
+if [[ -n $project_dir ]]; then
+    proj=$project_dir cur=$current_dir
+    [[ $proj == / ]] || proj=${proj%/}
+    [[ $cur == / ]] || cur=${cur%/}
+    part=$(short_path "$proj")
+    if [[ -z $cur || $cur == "$proj" ]]; then :
+    elif [[ $cur == "$proj"/* ]]; then part+=" ↳ ${cur#"$proj"/}"
+    else part+=" ↳ $(short_path "$cur")"; fi
+    parts+=("$part")
+    git_branch "$proj"
+    [[ -n $branch ]] && parts+=("$branch${wt:+ wt}")
+fi
 
-printf '%s\n' "$line"
+line2=""
+for part in "${parts[@]}"; do line2+=${line2:+ · }$part; done
+
+if [[ -n $line1 ]]; then printf '%s\n' "$line1"; fi
+if [[ -n $line2 ]]; then printf '%s\n' "$line2"
+elif [[ -z $line1 ]]; then printf '\n'; fi
 exit 0
