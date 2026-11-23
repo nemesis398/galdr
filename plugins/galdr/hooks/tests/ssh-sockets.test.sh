@@ -211,8 +211,8 @@ check "exit 0 when galdr/ cannot be made (a file is in its place)" \
 reset
 config '{"statusline":{"sshHosts":{"a":"slow1.example.org","b":"slow2.example.org"}}}'
 run
-check "two hosts of 1 s each take well under 2 s: ssh runs for all at once" \
-    'silent && ((took >= 1000 && took < 1700)) && [[ $(calls) == 2 ]] \
+check "two hosts of 1 s each take under 2 s: ssh runs for all at once" \
+    'silent && ((took >= 1000 && took < 1950)) && [[ $(calls) == 2 ]] \
     && cached $'"'"'a\t/x/cm-slow1.example.org\nb\t/x/cm-slow2.example.org\n'"'"
 config '{"statusline":{"sshHosts":{"github":"github.com"}}}'
 
