@@ -33,12 +33,16 @@
 
 set -uo pipefail
 
-SELF=$(readlink -f "$0")
-HOOK=${SSH_SOCKETS_UNDER_TEST:-${SELF%/*/*}/ssh-sockets.sh}
-HOOK=$(readlink -f "$HOOK")
+# Paths are resolved with the cd -P builtin, not readlink -f, so the tests
+# run on macOS too, where /tmp and /var/folders are links into /private.
+case $0 in */*) here=${0%/*} ;; *) here=. ;; esac
+HERE=$(cd -P -- "$here" && pwd -P) || { echo "cannot resolve $0" >&2; exit 2; }
+HOOK=${SSH_SOCKETS_UNDER_TEST:-${HERE%/*}/ssh-sockets.sh}
+HOOK=$(cd -P -- "${HOOK%/*}" 2>/dev/null && pwd -P)/${HOOK##*/}
 [ -f "$HOOK" ] || { echo "missing $HOOK" >&2; exit 2; }
 
 SB=$(mktemp -d "${TMPDIR:-/tmp}/ssh-sockets-test.XXXXXX")
+SB=$(cd -P -- "$SB" && pwd -P)
 trap 'rm -rf -- "$SB"' EXIT
 
 pass=0 fail=0
@@ -236,7 +240,7 @@ config '{"statusline":{"sshHosts":{"github":"github.com"}}}'
 
 # --- as hooks.json runs it -------------------------------------------------
 
-PLUGIN=${SELF%/*/*/*}
+PLUGIN=${HERE%/*/*}
 mkdir -p "$SB/root space" && cp -r -- "$PLUGIN" "$SB/root space/galdr"
 CMD=$(jq -r '.hooks.SessionStart[].hooks[] | select(.command | test("ssh-sockets")) | .command' "$PLUGIN/hooks/hooks.json")
 TIMEOUT=$(jq -r '.hooks.SessionStart[].hooks[] | select(.command | test("ssh-sockets")) | .timeout' "$PLUGIN/hooks/hooks.json")

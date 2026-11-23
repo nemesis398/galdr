@@ -25,12 +25,16 @@
 
 set -uo pipefail
 
-SELF=$(readlink -f "$0")
-HOOK=${PLAN_TRACK_UNDER_TEST:-${SELF%/*/*}/plan-track.sh}
-HOOK=$(readlink -f "$HOOK")
+# Paths are resolved with the cd -P builtin, not readlink -f, so the tests
+# run on macOS too, where /tmp and /var/folders are links into /private.
+case $0 in */*) here=${0%/*} ;; *) here=. ;; esac
+HERE=$(cd -P -- "$here" && pwd -P) || { echo "cannot resolve $0" >&2; exit 2; }
+HOOK=${PLAN_TRACK_UNDER_TEST:-${HERE%/*}/plan-track.sh}
+HOOK=$(cd -P -- "${HOOK%/*}" 2>/dev/null && pwd -P)/${HOOK##*/}
 [ -f "$HOOK" ] || { echo "missing $HOOK" >&2; exit 2; }
 
 SB=$(mktemp -d "${TMPDIR:-/tmp}/plan-track-test.XXXXXX")
+SB=$(cd -P -- "$SB" && pwd -P)
 trap 'rm -rf -- "$SB"' EXIT
 
 pass=0 fail=0
@@ -98,7 +102,7 @@ run -- "$(edit "$SID" "$PLANS/2026-11-22-galdr.md")"
 check "records a plan: the state file holds its absolute path" \
     'silent && recorded "$PLANS/2026-11-22-galdr.md"'
 check "the state file is one line, and no temp file stays behind" \
-    '[[ $(find "$STATE" -type f | wc -l) == 1 && $(wc -l <"$STATE/$SID") == 1 ]]'
+    '(( $(find "$STATE" -type f | wc -l) == 1 && $(wc -l <"$STATE/$SID") == 1 ))'
 
 run -- "$(edit "$SID" "$SB/other/x.md")"
 check "a later edit outside plans.dir keeps the plan already recorded" \
@@ -213,7 +217,7 @@ check "a write prunes state files older than 30 days and keeps younger ones" \
 
 # --- as hooks.json runs it -------------------------------------------------
 
-PLUGIN=${SELF%/*/*/*}
+PLUGIN=${HERE%/*/*}
 mkdir -p "$SB/root space" && cp -r -- "$PLUGIN" "$SB/root space/galdr"
 CMD=$(jq -r '.hooks.PostToolUse[] | select(.matcher == "Edit|Write") | .hooks[].command' "$PLUGIN/hooks/hooks.json")
 reset
