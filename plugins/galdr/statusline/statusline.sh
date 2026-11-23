@@ -5,7 +5,8 @@
 # neither line, one empty line is):
 #   line 1: <model> <effort> · ctx <n>% · 5h <n>% ↻<HH:MM> · wk <n>% ↻<Mo> ·
 #           <Model> <n>% ... · cache <n>m · credits <used>/<limit> €
-#   line 2: [<host> · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt]
+#   line 2: [<host> · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] ·
+#           plan <name> <n>%|✓
 # The project is workspace.project_dir with $HOME as ~ (whole components
 # only). ↳ shows the current directory relative to it when below it, in
 # full when outside it. The branch comes from .git/HEAD, or from the gitdir:
@@ -13,6 +14,16 @@
 # Fields reach bash tab-separated, each led by _ so that empty ones keep
 # their place. The session id is cleaned to [A-Za-z0-9-] and printed
 # (8 characters) only next to bg.
+#
+# The plan is the one plan-track.sh (a PostToolUse hook) last saw this
+# session edit: it writes the plan's path to
+# ${XDG_STATE_HOME:-~/.local/state}/galdr/plan/<session id>. The id is the
+# cleaned one, so the read stays in that directory. Of the plan, at most the
+# first 40 lines are read, up to the frontmatter's closing ---, for
+# progress: and status:. status: done prints a check, a progress that is a
+# whole number prints as a percentage, anything else prints the name alone.
+# The name is the file's without .md and without a leading YYYY-MM-DD-. A
+# plan that is gone, or has no frontmatter that closes, prints no part.
 #
 # Why: the line answers "can I keep going, and what does the next turn cost"
 # without opening /usage. The limits and the cache age are what otherwise
@@ -217,6 +228,35 @@ git_branch() {
     [[ -n $branch ]] || wt=""
 }
 
+# plan_of <state file>: sets plan to "plan <name> <n>%", "plan <name> ✓",
+# "plan <name>" or nothing, from the plan whose path the state file holds.
+# It sets a global instead of printing, so no subshell is forked.
+plan_of() {
+    local f="" line="" n=0 closed="" progress="" status="" name
+    plan=""
+    { read -r f || [[ -n $f ]]; } 2>/dev/null <"$1" || return 0
+    [[ $f == /*.md && -f $f && -r $f ]] || return 0
+    while ((n++ < 40)) && line="" && { IFS= read -r line || [[ -n $line ]]; }; do
+        line=${line%$'\r'}
+        if ((n == 1)); then [[ $line == --- ]] || return 0; continue; fi
+        if [[ $line == --- ]]; then closed=1; break; fi
+        case $line in
+            progress:*) progress=${line#progress:} ;;
+            status:*) status=${line#status:} ;;
+        esac
+    done 2>/dev/null <"$f"
+    [[ -n $closed ]] || return 0
+    progress=${progress//[\"\'[:space:]]/} status=${status//[\"\'[:space:]]/}
+    name=${f##*/}
+    name=${name%.md}
+    [[ $name =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-(.+)$ ]] && name=${BASH_REMATCH[1]}
+    name=${name//[[:cntrl:]]/}
+    [[ -n $name ]] || return 0
+    plan="plan $name"
+    if [[ $status == "done" ]]; then plan+=" ✓"
+    elif [[ $progress =~ ^[0-9]+$ ]]; then plan+=" $progress%"; fi
+}
+
 # Line 2, one part at a time, joined with " · ". Later parts append to parts.
 parts=()
 if [[ $quiet != q ]]; then
@@ -240,6 +280,10 @@ if [[ -n $project_dir ]]; then
     parts+=("$part")
     git_branch "$proj"
     [[ -n $branch ]] && parts+=("$branch${wt:+ wt}")
+fi
+if [[ -n $session_id ]]; then
+    plan_of "${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/galdr/plan/$session_id"
+    [[ -n $plan ]] && parts+=("$plan")
 fi
 
 line2=""

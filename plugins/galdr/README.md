@@ -1,6 +1,6 @@
 # galdr: hooks and status line
 
-The `galdr` plugin holds six Claude Code hooks and a status line. Install it
+The `galdr` plugin holds seven Claude Code hooks and a status line. Install it
 from the galdr marketplace:
 
 ```text
@@ -22,6 +22,7 @@ a space in its path works.
 | SessionStart | `prune-claude-tmp` | 30 s | deletes the `/tmp/claude-<uid>` folders of sessions that have ended |
 | SessionStart | `session-preflight` | 10 s | warns of Nextcloud conflicted copies and a NetBird mesh that is or goes down |
 | PreToolUse, matcher `WebSearch` | `web-route` | 5 s | sends WebSearch to `searx` while SearXNG answers |
+| PostToolUse, matcher `Edit\|Write` | `plan-track` | 5 s | records the plan file a session edits, for the status line |
 | WorktreeCreate | `worktree-create` | 600 s | creates and provisions the worktree: ignored files, dependencies, the repository's setup |
 | WorktreeRemove | `worktree-remove` | 60 s | runs the repository's teardown, removes the worktree, and its branch when that is safe |
 | SubagentStop | `worktree-subagent-stop` | 30 s | sweeps idle subagent worktrees, which Claude Code never removes |
@@ -67,12 +68,19 @@ setting stable.
 The status line prints two lines, each part only when its data exists, and
 a line with no part is not printed. Line 1 is the budget: model and effort,
 context, the 5h and weekly limits, the cache age, credits. Line 2 is place
-and work: `[host · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt]`. The
+and work: `[host · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] · plan <name> <n>%`. The
 project is `workspace.project_dir` with `$HOME` shown as `~`. `↳` follows
 when the current directory is below it (its relative path) or outside it
 (its own path). The branch is read from `.git/HEAD` (a short sha when
 detached, `wt` in a linked worktree), and nothing prints outside a
 repository. The session id (first 8 characters) shows only next to `bg`.
+
+The plan is the `*.md` file directly in `plans.dir` that the session last
+edited with Edit or Write, as the `plan-track` hook recorded it. Its name
+drops `.md` and a leading `YYYY-MM-DD-`, so `2026-11-22-galdr.md` prints as
+`galdr`. The percentage is the frontmatter's `progress:`, and `status: done`
+prints `✓` instead. A plan that was moved or deleted, or has no frontmatter,
+prints no part, and so does a session without `plans.dir`.
 
 ## The config file
 
@@ -93,6 +101,7 @@ part off and fails in no other way.
 | `netbird.managementUrl` | string, a URL | `session-preflight.sh` | no server counts as the wrong one, and a NeedsLogin names none |
 | `netbird.whenDown` | string, one sentence | `session-preflight.sh` | the NetBird warnings do not say what fails while the mesh is down |
 | `statusline.quietHosts` | list of host names, without a domain | `statusline.sh` | every host shows its tag |
+| `plans.dir` | string, an absolute path | `plan-track.sh` | no plan is recorded, and the status line shows none |
 
 For example:
 
@@ -108,14 +117,17 @@ For example:
     "managementUrl": "https://netbird.example.org:443",
     "whenDown": "While the mesh is down, the deploy server refuses every request."
   },
-  "statusline": { "quietHosts": ["laptop"] }
+  "statusline": { "quietHosts": ["laptop"] },
+  "plans": { "dir": "/home/alice/Nextcloud/Notes/plans" }
 }
 ```
 
 ## State
 
 The logs go under `${XDG_STATE_HOME:-~/.local/state}/galdr/`:
-`prune-claude-tmp.log` and `worktree-hooks.log`. One file stays outside it:
+`prune-claude-tmp.log` and `worktree-hooks.log`. `plan-track` writes one
+file per session to `galdr/plan/<session id>`, holding the plan's path, and
+deletes the ones older than 30 days. One file stays outside it:
 `web-route` caches whether SearXNG answers in
 `${XDG_STATE_HOME:-~/.local/state}/web-route/reachable`, because `searx`
 writes the same file when a search fails, and that is how a failed search

@@ -665,6 +665,98 @@ CASE="garbage stdin and bg: the host tag and bg alone, on one line"
 PARENT_KIND='bg' run_sl 'not json' HOSTNAME=other-host HOME="$H"
 expect "$(host_tag other-host) · bg"
 
+# --- the plan ----------------------------------------------------------------------
+
+echo "the plan"
+
+# plan-track.sh records the plan a session edits in
+# $XDG_STATE_HOME/galdr/plan/<session id>, one line, its absolute path.
+# track <path>: records <path> for the fixture's session.
+PL=$ROOT/plans PSTATE=$ROOT/state/galdr/plan
+P_SID_FULL=c0ffee00-1234-4abc-8def-000000000001
+mkdir -p "$PL" "$PSTATE"
+track() { printf '%s\n' "$1" >"$PSTATE/$P_SID_FULL"; }
+printf -- '---\ntype: plan\nstatus: active\nprogress: 71\n---\n# x\nprogress: 5\n' >"$PL/2026-11-22-galdr.md"
+printf -- '---\nstatus: done\nprogress: 100\n---\n' >"$PL/2026-11-20-done.md"
+printf -- '---\nprogress: 30\n---\n' >"$PL/notes.md"
+printf -- '# no frontmatter\nprogress: 50\n' >"$PL/2026-11-21-bare.md"
+printf -- '---\nstatus: active\nprogress: lots\n---\n' >"$PL/2026-11-21-nan.md"
+printf -- '---\r\nprogress: 42 \r\n---\r\n' >"$PL/2026-11-21-crlf.md"
+{ printf -- '---\n'; for _ in $(seq 45); do printf 'k: v\n'; done; printf 'progress: 9\n---\n'; } >"$PL/2026-11-21-long.md"
+
+CASE="plan 71%: the plan this session edits, with its progress"
+track "$PL/2026-11-22-galdr.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main · plan galdr 71%"
+
+CASE="plan done ✓: status done prints a check instead of the progress"
+track "$PL/2026-11-20-done.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main · plan done ✓"
+
+CASE="a name without a date prefix stays whole (notes.md gives notes)"
+track "$PL/notes.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main · plan notes 30%"
+
+CASE="plan file gone: no part"
+track "$PL/2026-11-22-moved.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main"
+
+CASE="no frontmatter: no part"
+track "$PL/2026-11-21-bare.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main"
+
+CASE="a frontmatter that does not close in 40 lines: no part"
+track "$PL/2026-11-21-long.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main"
+
+CASE="progress not a number: the name without a percentage"
+track "$PL/2026-11-21-nan.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main · plan nan"
+
+CASE="CRLF line ends and a trailing space are read"
+track "$PL/2026-11-21-crlf.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main · plan crlf 42%"
+
+CASE="a state file whose path is a directory: no part"
+track "$PL"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main"
+
+CASE="no state file for the session: no part"
+rm -f -- "$PSTATE/$P_SID_FULL"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main"
+
+CASE="a session id with ../ reads only the cleaned name under plan/"
+printf '%s\n' "$PL/notes.md" >"$ROOT/state/galdr/evil"
+printf '%s\n' "$PL/2026-11-22-galdr.md" >"$PSTATE/evil"
+run_sl "$(placed "$H/proj" "$H/proj" '.session_id = "../evil"')" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main · plan galdr 71%"
+
+CASE="a session id with nothing left after cleaning: no part"
+run_sl "$(placed "$H/proj" "$H/proj" '.session_id = "/.."')" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main"
+rm -f -- "$ROOT/state/galdr/evil" "$PSTATE/evil"
+
+CASE="the plan prints without a project"
+track "$PL/2026-11-22-galdr.md"
+run_sl "$(placed "" "")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"plan galdr 71%"
+
+CASE="control characters in the plan's name are dropped"
+printf -- '---\nprogress: 1\n---\n' >"$PL/a"$'\e'"[2Jb.md"
+track "$PL/a"$'\e'"[2Jb.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main · plan a[2Jb 1%"
+rm -f -- "$PSTATE/$P_SID_FULL"
+
 # --- NO_COLOR --------------------------------------------------------------------
 
 echo "NO_COLOR"
