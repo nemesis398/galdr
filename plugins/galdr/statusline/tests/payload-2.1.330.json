@@ -1,0 +1,80 @@
+{
+  "session_id": "1234abcd-0000-4000-8000-000000000000",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/1234abcd-0000-4000-8000-000000000000.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "00000000-0000-4000-8000-000000000001",
+  "effort": {
+    "level": "high"
+  },
+  "session_name": "example",
+  "model": {
+    "id": "claude-opus-5-5",
+    "display_name": "Opus 5.5"
+  },
+  "workspace": {
+    "current_dir": "/home/user/proj",
+    "project_dir": "/home/user/proj",
+    "added_dirs": [
+      "/home/user/other"
+    ],
+    "repo": {
+      "host": "git.example.org",
+      "owner": "user",
+      "name": "proj"
+    }
+  },
+  "version": "2.1.330",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 1.5917141,
+    "total_duration_ms": 1147535,
+    "total_api_duration_ms": 342645,
+    "total_lines_added": 162,
+    "total_lines_removed": 0
+  },
+  "context_window": {
+    "total_input_tokens": 100653,
+    "total_output_tokens": 461,
+    "context_window_size": 1000000,
+    "current_usage": {
+      "input_tokens": 2,
+      "output_tokens": 461,
+      "cache_creation_input_tokens": 179,
+      "cache_read_input_tokens": 100472
+    },
+    "used_percentage": 10,
+    "remaining_percentage": 90
+  },
+  "exceeds_200k_tokens": false,
+  "prompt_cache": {
+    "warm": true,
+    "caching_observed": true,
+    "ttl": "1h",
+    "expires_at": 1795462398,
+    "requests": 29,
+    "misses": 0,
+    "expected_rebuilds": 0,
+    "hit_ratio": 0.9600703955231307,
+    "cache_write_tokens": 82587,
+    "miss_recache_tokens": 0,
+    "last_miss_at": null,
+    "last_miss_cause": null,
+    "miss_causes": {},
+    "recache_tokens_if_cold": 100653
+  },
+  "fast_mode": false,
+  "thinking": {
+    "enabled": true
+  },
+  "rate_limits": {
+    "seven_day": {
+      "used_percentage": 9,
+      "resets_at": 1795986000
+    }
+  },
+  "vim": {
+    "mode": "INSERT"
+  }
+}
