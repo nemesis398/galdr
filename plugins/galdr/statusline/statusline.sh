@@ -201,7 +201,7 @@ def body:
    ($in | text(.workspace?.project_dir)),
    ($in | text(.workspace?.current_dir)),
    ($in | text(.session_id) | gsub("[^A-Za-z0-9-]"; "")),
-   ssh_labels]
+   ([ssh_labels] | join("\u001f"))]
 | map("_" + .) | join("\t")'
 # Every field leads with _, which is stripped below: read splits on a tab as
 # on white space, so an empty field would otherwise swallow its neighbour.
@@ -211,7 +211,10 @@ IFS=$'\t' read -r -a fields <<<"$(jq -nr --arg c "$color_on" --arg host "$host" 
 for i in "${!fields[@]}"; do fields[i]=${fields[i]#_}; done
 quiet=${fields[0]} line1=${fields[1]} project_dir=${fields[2]}
 current_dir=${fields[3]} session_id=${fields[4]}
-ssh_labels=("${fields[@]:5}")
+# The labels come as one field, joined by \x1f, which no label can hold, so
+# the fields keep their places and later ones follow this one.
+ssh_labels=()
+[[ -n ${fields[5]-} ]] && IFS=$'\x1f' read -r -a ssh_labels <<<"${fields[5]}"
 
 # short_path <abs>: the path with $HOME as ~, on a whole component only, so
 # /home/user2 is not ~2 under HOME=/home/user.

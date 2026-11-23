@@ -33,13 +33,15 @@
 # that starts with - is left out too, and the host reaches ssh as one
 # argument after --, so no host can become an option.
 #
-# Why this stays well inside the 10 s timeout without timeout(1), which
-# macOS lacks: ssh -G prints the configuration and exits. It opens no
-# connection and asks no key. Only two things in an SSH config can make it
-# wait: a Match exec command and CanonicalizeHostname, which looks the name
-# up in DNS. So all hosts run at once, and whatever has not returned after
-# 3 s is killed and left out. The watchdog's sleep may outlive the hook by
-# those 3 s, on /dev/null, holding nothing of the hook's.
+# Why there is no watchdog: ssh -G prints the configuration and exits. It
+# opens no connection and asks no key. Only two things in an SSH config can
+# make it wait: a Match exec command and CanonicalizeHostname, which looks
+# the name up in DNS. All hosts run at once, so a slow one costs its own
+# time and not the sum. Should one hang, the hook's 10 s timeout ends it,
+# and the old cache stays, since it is only replaced at the end. A kill of
+# its own could not do better without timeout(1), which macOS lacks, or
+# wait -n: it would signal the PID of a host that had already exited and
+# been reaped, which the system may have given to another process.
 #
 # Fails open on everything: no ssh, no jq, a config that does not parse, an
 # unwritable state directory. It prints nothing and exits 0, and below bash 4
@@ -72,14 +74,12 @@ work=$state/.ssh-sockets.$$
 { [[ -d $state ]] || mkdir -p -- "$state"; } 2>/dev/null || exit 0
 mkdir -- "$work" 2>/dev/null || exit 0
 
-# All hosts at once, each into its own file, then the watchdog.
+# All hosts at once, each into its own file.
 pids=()
 for i in "${!entries[@]}"; do
     ssh -G -- "${entries[i]#*$'\t'}" </dev/null >"$work/$i" 2>/dev/null &
     pids[i]=$!
 done
-{ sleep 3 && kill -- "${pids[@]}"; } </dev/null >/dev/null 2>&1 &
-watchdog=$!
 
 cache=""
 for i in "${!entries[@]}"; do
@@ -91,7 +91,6 @@ for i in "${!entries[@]}"; do
     [[ $path == /* && $path != *[[:cntrl:]]* ]] || continue
     cache+=${entries[i]%%$'\t'*}$'\t'$path$'\n'
 done
-kill "$watchdog" 2>/dev/null
 
 tmp=$state/.ssh-sockets.tmp.$$
 if { printf '%s' "$cache" >"$tmp"; } 2>/dev/null; then
