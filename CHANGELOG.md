@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `galdr` 0.2.0: the hooks run on GNU and BSD userlands alike, so on macOS without Homebrew's coreutils too. Each hook needs bash 4.4 or newer and, under an older bash, exits at once, `worktree-create` and `worktree-remove` naming the bash they need. `flock` is used only together with `setsid`, and where either is missing the subagent sweep takes a `mkdir` lock instead. The hook tests run each case under GNU, BSD and BSD with g-tools through `tests/lib/bsd-shims.sh`, and a `shell-macos` CI job runs them on an Intel Mac.
+- `lead` 0.1.1: the build agent has the Skill tool, so it can load `simplify-changes`.
+
 ## 0.1.1 - 2026-11-22
 
 - `galdr`: the session preflight and both worktree teardowns kill what is left of `timeout`'s process group themselves, because uutils `timeout` (Ubuntu 26.04) sends its SIGKILL to the child alone.

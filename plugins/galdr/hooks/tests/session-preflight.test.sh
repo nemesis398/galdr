@@ -46,6 +46,8 @@ bad() { fail=$((fail+1)); printf '  \033[31m✗\033[0m %s\n     %s\n' "$CASE" "$
         printf 'stdout: %s\nstderr: %s\n' "$(cat -v "$ROOT/out")" "$ERR" | sed 's/^/       | /'; }
 
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/session-preflight-test.XXXXXX")
+# Resolved, as macOS keeps /tmp and /var/folders under /private.
+ROOT=$(cd -P -- "$ROOT" && pwd -P)
 trap 'rm -rf -- "$ROOT"' EXIT
 
 # The tools the hook may call, with and without jq.
@@ -228,9 +230,9 @@ mk "$ROOT/home/Nextcloud" "memory/x $STAMP.md"
 NB_BASE='{"management":{"url":"https://netbird.example.org:443","connected":true,"error":""},"signal":{"url":"https://netbird.example.org:443","connected":true,"error":""},"sessionExpiresAt":"2026-09-25T11:18:46.802896359Z","daemonStatus":"Connected","daemonVersion":"0.79.0","cliVersion":"0.79.0","profileName":"default","fqdn":"laptop.example.org","peers":{"total":3,"connected":2}}'
 
 # iso <seconds from now>: that time in RFC 3339 UTC, with nanoseconds as netbird prints it.
-iso() { date -u -d "@$((EPOCHSECONDS + $1))" +%Y-%m-%dT%H:%M:%S.802896359Z; }
+iso() { TZ=UTC printf '%(%Y-%m-%dT%H:%M:%S.802896359Z)T' "$((EPOCHSECONDS + $1))"; }
 # at <seconds from now> <format>: that time in UTC in the given date format.
-at() { TZ=UTC date -d "@$((EPOCHSECONDS + $1))" "+$2"; }
+at() { TZ=UTC printf "%($2)T" "$((EPOCHSECONDS + $1))"; }
 
 # fixture <name> <text>: writes a netbird output and prints its path.
 fixture() { printf '%s\n' "$2" >"$ROOT/nb/$1"; printf '%s' "$ROOT/nb/$1"; }
@@ -477,7 +479,7 @@ run_hook NB_OUT="$(nb edge-out ".sessionExpiresAt = \"$(iso 7500)\"")"
 expect_silent
 
 begin "an expiry with a +02:00 offset is read as the same instant"
-run_hook NB_OUT="$(nb offset ".sessionExpiresAt = \"$(TZ=Etc/GMT-2 date -d "@$((EPOCHSECONDS + 3000))" +%Y-%m-%dT%H:%M:%S.5+02:00)\"")"
+run_hook NB_OUT="$(nb offset ".sessionExpiresAt = \"$(TZ=Etc/GMT-2 printf '%(%Y-%m-%dT%H:%M:%S.5+02:00)T' "$((EPOCHSECONDS + 3000))")\"")"
 expect_json
 sys_is "NetBird session ends at $(at 3000 %H:%M) (in 50 min): run netbird login --extend"
 verdict
@@ -490,7 +492,7 @@ has "NetBird: this machine is off the mesh (its SSO session ended at 2025-11-24 
 verdict
 
 begin "preflight_expiry_without_date_d: an expiry 50 min ahead in +01:00 warns as in UTC"
-run_hook NB_OUT="$(nb offset-soon ".sessionExpiresAt = \"$(TZ=Etc/GMT-1 date -d "@$((EPOCHSECONDS + 3000))" +%Y-%m-%dT%H:%M:%S+01:00)\"")"
+run_hook NB_OUT="$(nb offset-soon ".sessionExpiresAt = \"$(TZ=Etc/GMT-1 printf '%(%Y-%m-%dT%H:%M:%S+01:00)T' "$((EPOCHSECONDS + 3000))")\"")"
 expect_json
 sys_is "NetBird session ends at $(at 3000 %H:%M) (in 50 min): run netbird login --extend"
 verdict

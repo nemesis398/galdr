@@ -46,6 +46,8 @@ HOOK=$(readlink -f "$HOOK")
 bsd_each_userland "$SELF" "$@"
 
 SB=$(mktemp -d "${TMPDIR:-/tmp}/web-route-test.XXXXXX")
+# Resolved, as macOS keeps /tmp and /var/folders under /private.
+SB=$(cd -P -- "$SB" && pwd -P)
 SERVER_PID=""
 cleanup() {
     [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
@@ -116,7 +118,7 @@ DEAD=http://127.0.0.1:$(python3 -I -c 'import socket; s = socket.socket(); s.bin
 CACHE=$SB/state/web-route/reachable
 now() { printf '%(%s)T' -1; }
 mode() { echo "$1" >"$SB/mode"; }
-probes() { wc -l <"$SB/probes.log"; }
+probes() { echo $(( $(wc -l <"$SB/probes.log") )); }
 forge() { mkdir -p "$SB/state/web-route"; printf '%s\n' "$1" >"$CACHE"; }
 reset() { rm -rf "$SB/state/web-route"; mode up; : >"$SB/probes.log"; }
 
@@ -149,7 +151,7 @@ reset
 run -- "$(search 'react hooks best practices')"
 check "SearXNG up: the call is denied in the PreToolUse format" \
     '[[ $rc == 0 && -z $err ]] && jq -e ".hookSpecificOutput | .hookEventName == \"PreToolUse\" and .permissionDecision == \"deny\"" >/dev/null <<<"$out"'
-check "the output is one JSON line and nothing else" '[[ $(wc -l <<<"$out") == 1 ]] && jq -e . >/dev/null <<<"$out"'
+check "the output is one JSON line and nothing else" '(( $(wc -l <<<"$out") == 1 )) && jq -e . >/dev/null <<<"$out"'
 check "the reason tells the model to run searx through Bash with the same query" \
     '[[ $(reason) == *"Run this through Bash instead:"* && $(reason) == *"  searx '"'"'react hooks best practices'"'"'"* ]]'
 check "the reason says what to do when searx itself fails" '[[ $(reason) == *"If searx exits 2"* ]]'

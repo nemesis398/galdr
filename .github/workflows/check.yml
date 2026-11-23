@@ -54,7 +54,9 @@ jobs:
         run: |
           export PATH="$(brew --prefix)/bin:$PATH"
           bash --version | head -n1
-          for t in plugins/*/*/tests/*.test.sh; do
+          # The hook tests only: statusline.test.sh reads /proc and calls
+          # date -d, so it runs on Linux alone.
+          for t in plugins/galdr/hooks/tests/*.test.sh; do
             [ -f "$t" ] && bash "$t"
           done
 

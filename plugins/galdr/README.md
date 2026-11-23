@@ -30,8 +30,8 @@ Each script's header says why it exists and what it does in each case.
 `jq`, `curl`, `git`, `netbird`, `pnpm`, `npm` and `uv` come from your PATH.
 The hooks run on Linux and on macOS, where they need Homebrew's bash 4.4 or
 newer first in PATH; Homebrew's `coreutils` is optional. Under macOS's own
-bash 3.2 each hook exits at once without a word, except the two worktree
-hooks, which fail naming the bash they need. `prune-claude-tmp` prunes only
+bash 3.2 each hook exits at once without a word, except `worktree-create`
+and `worktree-remove`, which fail naming the bash they need. `prune-claude-tmp` prunes only
 where `/proc` is, so on macOS it does nothing.
 `searx` is an optional command-line client for a SearXNG instance (ravnix ships
 one as packages/searx). A hook whose tool is missing stays silent, except

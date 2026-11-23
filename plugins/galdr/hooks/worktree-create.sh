@@ -93,7 +93,6 @@ rollback() {
     fi
 }
 
-# fail <reason>: undo, log, and end with the reason as the last stderr line.
 # limit <kill-after> <seconds> <command...>: GNU timeout's contract on GNU
 # and BSD userlands. With gtimeout (Homebrew coreutils) or timeout, that runs
 # in the background, where it leads a process group of its own, and the hook
@@ -165,6 +164,7 @@ mtime() {
     stat "${stat_mtime[@]}" -- "$1" 2>/dev/null
 }
 
+# fail <reason>: undo, log, and end with the reason as the last stderr line.
 fail() {
     trap - TERM INT HUP
     cd / || true

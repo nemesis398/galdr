@@ -47,6 +47,9 @@ bad() { fail=$((fail+1)); printf '  \033[31m✗\033[0m %s\n     %s\n' "$CASE" "$
         printf 'stdout: %s\nstderr (tail):\n%s\n' "$OUT" "$(tail -n 8 <<<"$ERR")" | sed 's/^/       | /'; }
 
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/worktree-hooks-test.XXXXXX")
+# Resolved, as macOS keeps /tmp and /var/folders under /private, and the hooks
+# print resolved paths.
+ROOT=$(cd -P -- "$ROOT" && pwd -P)
 trap 'rm -rf -- "$ROOT"' EXIT
 
 # --- the sandbox -----------------------------------------------------------
@@ -206,6 +209,11 @@ wait_for_log() { # wait_for_log <text>
     return 1
 }
 
+# ago <seconds>: that long before now as touch -t takes it, GNU and BSD alike.
+ago() { printf '%(%Y%m%d%H%M.%S)T' "$((EPOCHSECONDS - $1))"; }
+# mode_of <file>: its permission bits in octal, by GNU stat or by BSD stat.
+mode_of() { stat -c %a -- "$1" 2>/dev/null || stat -f %Lp -- "$1"; }
+
 wt_path()       { printf '%s/.claude/worktrees/%s' "$MAIN" "$1"; }
 head_of()       { git -C "$1" rev-parse HEAD; }
 branch_exists() { git -C "$MAIN" show-ref --verify -q "refs/heads/$1"; }
@@ -214,11 +222,12 @@ registered()    { git -C "$MAIN" worktree list --porcelain | grep -qxF "worktree
 last_err()      { printf '%s\n' "$ERR" | sed '/^$/d' | tail -n 1; }
 
 # ended <pid>: true once the process is gone or a zombie, waiting up to 2 s.
+# ps, not /proc, so that it holds on macOS too.
 ended() {
     local _ s
     for _ in $(seq 1 20); do
-        s=$(cut -d' ' -f3 "/proc/$1/stat" 2>/dev/null) || return 0
-        [ "$s" = Z ] && return 0
+        s=$(ps -o stat= -p "$1" 2>/dev/null) || return 0
+        [[ $s == *Z* ]] && return 0
         sleep 0.1
     done
     return 1
@@ -310,11 +319,11 @@ make_repo pnpm-lock.yaml
 create again
 W=$(wt_path again)
 printf 'work in progress\n' >"$W/wip.txt"
-calls=$(wc -l <"$STUB_LOG")
+calls=$(( $(wc -l <"$STUB_LOG") ))
 create again
 if   [ "$RC" -ne 0 ];                        then bad "expected exit 0, got $RC"
 elif [ "$OUT" != "$W" ];                     then bad "expected the same path $W"
-elif [ "$(wc -l <"$STUB_LOG")" != "$calls" ]; then bad "the resume ran the installer again"
+elif (( $(wc -l <"$STUB_LOG") != calls )); then bad "the resume ran the installer again"
 elif [ ! -f "$W/wip.txt" ];                  then bad "the resume touched the worktree's contents"
 elif ! grep -q "create again $W resumed" "$LOG"; then bad "the log should say resumed"
 else ok; fi
@@ -436,7 +445,7 @@ W=$(wt_path inc)
 if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
 elif ! cmp -s "$MAIN/.env" "$W/.env"; then bad ".env was not copied"
 elif ! cmp -s "$MAIN/config/secret/k.json" "$W/config/secret/k.json"; then bad "config/secret/k.json was not copied"
-elif [ "$(stat -c %a "$W/config/secret/k.json")" != 600 ]; then bad "the mode 600 was not kept"
+elif [ "$(mode_of "$W/config/secret/k.json")" != 600 ]; then bad "the mode 600 was not kept"
 else ok; fi
 
 CASE="skips a symlink, an unlisted ignored file, an unignored file and settings.local.json"
@@ -727,7 +736,7 @@ age() {
     local admin f
     admin=$(git -C "$1" rev-parse --path-format=absolute --git-dir)
     for f in HEAD index logs/HEAD; do
-        [ -e "$admin/$f" ] && touch -d "$2 days ago" "$admin/$f"
+        [ -e "$admin/$f" ] && touch -t "$(ago $(( $2 * 86400 )))" "$admin/$f"
     done
 }
 
@@ -902,10 +911,10 @@ else ok; fi
 
 # sweep_lock's takeover rules, where the sweep takes the mkdir lock.
 if [ "$GALDR_USERLAND" != gnu ]; then
-    # pre_lock <pid> [<touch -d date>]: a lock directory as a sweep leaves it.
+    # pre_lock <pid> [<seconds ago>]: a lock directory as a sweep leaves it.
     pre_lock() {
         mkdir -p "$MAIN/$SWEEP_LOCK" && printf '%s\n' "$1" >"$MAIN/$SWEEP_LOCK/pid"
-        [ -z "${2:-}" ] || touch -d "$2" "$MAIN/$SWEEP_LOCK"
+        [ -z "${2:-}" ] || touch -t "$(ago "$2")" "$MAIN/$SWEEP_LOCK"
     }
 
     CASE="sweep_lock: a lock whose owner is dead is taken over, and the sweep runs"
@@ -922,11 +931,11 @@ if [ "$GALDR_USERLAND" != gnu ]; then
     make_repo
     create "agent-$A2"; W2=$OUT
     pre_lock "$$"
-    lines=$(wc -l <"$LOG")
+    lines=$(( $(wc -l <"$LOG") ))
     stop "$W2" "$A2"
     sleep 1
     if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
-    elif [ "$(wc -l <"$LOG")" != "$lines" ]; then bad "a sweep ran: $(tail -n 1 "$LOG")"
+    elif (( $(wc -l <"$LOG") != lines )); then bad "a sweep ran: $(tail -n 1 "$LOG")"
     elif [ "$(cat "$MAIN/$SWEEP_LOCK/pid" 2>/dev/null)" != "$$" ]; then bad "the live owner's lock was touched"
     else ok; fi
     rm -rf -- "${MAIN:?}/$SWEEP_LOCK"
@@ -934,7 +943,7 @@ if [ "$GALDR_USERLAND" != gnu ]; then
     CASE="sweep_lock: a lock over an hour old is taken over, its owner alive or not"
     make_repo
     create "agent-$A2"; W2=$OUT
-    pre_lock "$$" "2 hours ago"
+    pre_lock "$$" 7200
     stop "$W2" "$A2"
     if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
     elif ! sweep_done "subagent-stop agent-$A2 $W2 kept"; then bad "no sweep ran, or it left the lock: $(tail -n 1 "$LOG")"
@@ -1004,11 +1013,11 @@ else ok; fi
 CASE="a repository without agent worktrees spawns nothing and logs nothing"
 make_repo
 create feature
-lines=$(wc -l <"$LOG")
+lines=$(( $(wc -l <"$LOG") ))
 stop "$MAIN" "$A2"
 sleep 0.3
 if   [ "$RC" -ne 0 ];                    then bad "expected exit 0, got $RC"
-elif [ "$(wc -l <"$LOG")" != "$lines" ]; then bad "nothing should be logged: $(tail -n 1 "$LOG")"
+elif (( $(wc -l <"$LOG") != lines )); then bad "nothing should be logged: $(tail -n 1 "$LOG")"
 else ok; fi
 
 CASE="garbage on stdin still exits 0 with nothing on stdout"
@@ -1084,10 +1093,10 @@ s_rc=$RC s_out=$OUT s_err=$ERR
 HOOK_PATH=$B3:$HOOK_PATH run_cmd "$(hook_cmd WorktreeRemove worktree-remove)" "$MAIN" "$(jq -nc --arg p "$W" --arg c "$MAIN" \
     '{session_id:"s1",transcript_path:"/dev/null",cwd:$c,hook_event_name:"WorktreeRemove",worktree_path:$p}')"
 if   [ "$c_rc" -eq 0 ] || [ -n "$c_out" ] || [ -e "$W3" ]; then bad "create: rc $c_rc, stdout $c_out"
-elif [ "$(wc -l <<<"$c_err")" != 1 ] || [[ $c_err != *"needs bash 4"* ]]; then bad "create should say in one line that it needs bash 4: $c_err"
+elif (( $(wc -l <<<"$c_err") != 1 )) || [[ $c_err != *"needs bash 4"* ]]; then bad "create should say in one line that it needs bash 4: $c_err"
 elif [ "$s_rc" -ne 0 ] || [ -n "$s_out" ] || [ -n "$s_err" ]; then bad "stop: rc $s_rc, stdout $s_out, stderr $s_err"
 elif [ "$RC" -eq 0 ] || ! registered "$W"; then bad "remove: rc $RC, or the worktree went"
-elif [ "$(wc -l <<<"$ERR")" != 1 ] || [[ $ERR != *"needs bash 4"* ]]; then bad "remove should say in one line that it needs bash 4: $ERR"
+elif (( $(wc -l <<<"$ERR") != 1 )) || [[ $ERR != *"needs bash 4"* ]]; then bad "remove should say in one line that it needs bash 4: $ERR"
 else ok; fi
 
 # --- summary ----------------------------------------------------------------------
