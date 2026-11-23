@@ -250,13 +250,14 @@ required_env=()
 [[ -n ${fields[6]-} ]] && IFS=$'\x1f' read -r -a required_env <<<"${fields[6]}"
 env_hint=${fields[7]-} tmp_path=${fields[8]:-/tmp} tmp_share=${fields[9]-}
 
-# short_path <abs>: the path with $HOME as ~, on a whole component only, so
-# /home/user2 is not ~2 under HOME=/home/user.
+# short_path <abs>: sets short to the path with $HOME as ~, on a whole
+# component only, so /home/user2 is not ~2 under HOME=/home/user. It sets a
+# global instead of printing, so no subshell is forked.
 short_path() {
     local p=$1 h=${HOME%/}
-    if [[ -n $h && $p == "$h" ]]; then printf '~'
-    elif [[ -n $h && $p == "$h"/* ]]; then printf '~%s' "/${p#"$h"/}"
-    else printf '%s' "$p"; fi
+    if [[ -n $h && $p == "$h" ]]; then short='~'
+    elif [[ -n $h && $p == "$h"/* ]]; then short="~"/${p#"$h"/}
+    else short=$p; fi
 }
 
 # git_branch <dir>: sets branch (name, short sha or empty) and wt (1 in a
@@ -330,10 +331,11 @@ if [[ -n $project_dir ]]; then
     proj=$project_dir cur=$current_dir
     [[ $proj == / ]] || proj=${proj%/}
     [[ $cur == / ]] || cur=${cur%/}
-    part=$(short_path "$proj")
+    short_path "$proj"
+    part=$short
     if [[ -z $cur || $cur == "$proj" ]]; then :
     elif [[ $cur == "$proj"/* ]]; then part+=" ↳ ${cur#"$proj"/}"
-    else part+=" ↳ $(short_path "$cur")"; fi
+    else { short_path "$cur"; part+=" ↳ $short"; }; fi
     parts+=("$part")
     git_branch "$proj"
     [[ -n $branch ]] && parts+=("$branch${wt:+ wt}")
@@ -377,7 +379,9 @@ if [[ -n $project_dir ]]; then
         read -r c 2>/dev/null <"$d/comm" || continue
         if [[ $c == claude && $d/cwd -ef $proj ]]; then n=$((n + 1)); fi
     done
-    ((n)) && parts+=("⚠ $n session$([[ $n == 1 ]] || printf s) here")
+    plural=s
+    ((n == 1)) && plural=""
+    ((n)) && parts+=("⚠ $n session$plural here")
 fi
 # /tmp: df is the one process this script may start besides jq, at most
 # every 300 s. Its answer is cached as "<epoch> <used KiB> <size KiB>".
