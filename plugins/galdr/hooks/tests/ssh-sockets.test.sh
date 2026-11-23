@@ -40,6 +40,9 @@ HERE=$(cd -P -- "$here" && pwd -P) || { echo "cannot resolve $0" >&2; exit 2; }
 HOOK=${SSH_SOCKETS_UNDER_TEST:-${HERE%/*}/ssh-sockets.sh}
 HOOK=$(cd -P -- "${HOOK%/*}" 2>/dev/null && pwd -P)/${HOOK##*/}
 [ -f "$HOOK" ] || { echo "missing $HOOK" >&2; exit 2; }
+# shellcheck source=/dev/null
+. "$HERE/lib/bsd-shims.sh"
+bsd_each_userland "$HERE/${0##*/}" "$@"
 
 SB=$(mktemp -d "${TMPDIR:-/tmp}/ssh-sockets-test.XXXXXX")
 SB=$(cd -P -- "$SB" && pwd -P)
@@ -58,6 +61,8 @@ for t in bash jq mkdir mv rm sleep; do
     ln -s "$p" "$SYS/$t"
     [[ $t == jq ]] || ln -s "$p" "$NOJQ/$t"
 done
+bsd_apply "$SYS" || exit 2
+bsd_apply "$NOJQ" || exit 2
 
 LOG=$SB/ssh.d
 cat >"$FAKE/ssh" <<EOF

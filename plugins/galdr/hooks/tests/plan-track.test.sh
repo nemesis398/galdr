@@ -32,6 +32,9 @@ HERE=$(cd -P -- "$here" && pwd -P) || { echo "cannot resolve $0" >&2; exit 2; }
 HOOK=${PLAN_TRACK_UNDER_TEST:-${HERE%/*}/plan-track.sh}
 HOOK=$(cd -P -- "${HOOK%/*}" 2>/dev/null && pwd -P)/${HOOK##*/}
 [ -f "$HOOK" ] || { echo "missing $HOOK" >&2; exit 2; }
+# shellcheck source=/dev/null
+. "$HERE/lib/bsd-shims.sh"
+bsd_each_userland "$HERE/${0##*/}" "$@"
 
 SB=$(mktemp -d "${TMPDIR:-/tmp}/plan-track-test.XXXXXX")
 SB=$(cd -P -- "$SB" && pwd -P)
@@ -50,6 +53,8 @@ for t in bash find jq mkdir mv rm; do
     ln -s "$p" "$SYS/$t"
     [[ $t == jq ]] || ln -s "$p" "$NOJQ/$t"
 done
+bsd_apply "$SYS" || exit 2
+bsd_apply "$NOJQ" || exit 2
 
 PLANS=$SB/vault/plans
 mkdir -p "$PLANS/sub" "$SB/other" "$SB/home" "$SB/a b/plän"
