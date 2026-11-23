@@ -52,10 +52,11 @@
 # nothing on stdout. The hook itself runs jq and one git call; the sweep runs
 # detached under a lock per repository, so concurrent stops never sweep the
 # same repository twice, and a stop that finds the lock taken simply skips.
-# Where setsid and flock exist, that is setsid -f and a flock on
+# Where setsid and flock both exist, that is setsid -f and a flock on
 # <common>/worktrees. macOS has neither, so there the sweep runs in a process
 # group of its own (set -m) and takes a mkdir lock,
-# <common>/galdr-worktree-sweep.lock, itself (sweep_lock).
+# <common>/galdr-worktree-sweep.lock, itself (sweep_lock); so does a Mac with
+# Homebrew's flock but no setsid.
 #
 # macOS otherwise: the log time comes from bash's strftime instead of
 # date -Is, idle times from mtime (GNU or BSD stat), and the teardown's limit
@@ -158,10 +159,11 @@ mtime() {
 # sweep_lock <dir>: the lock flock -n gives, for a Mac without flock. mkdir is
 # atomic, and the directory holds its owner's pid. A lock is taken over when
 # its owner is gone or it is older than an hour, so a sweep that died (a
-# crash, a reboot) does not stop every later one; two stops that find the
-# same stale lock at the same moment may then both sweep, which costs a
-# refused `git worktree remove` at worst. A live lock means skip, as with
-# flock -n. Reads now.
+# crash, a reboot) does not stop every later one. Two stops that find the
+# same stale lock at the same moment may both take it over and sweep at once:
+# both can then run one worktree's teardown, so it runs twice, and one
+# `git worktree remove` is refused. A live lock means skip, as with flock -n.
+# Reads now.
 sweep_lock() {
     local pid="" m
     if ! mkdir -- "$1" 2>/dev/null; then
@@ -272,7 +274,7 @@ consider() {
 }
 
 # The detached half: worktree-subagent-stop.sh --sweep <main> <self-top>
-# <self-name> [<lock dir>]. The lock dir comes only where flock is missing.
+# <self-name> [<lock dir>]. The lock dir comes where flock or setsid is missing.
 if [[ ${1:-} == --sweep ]]; then
     main=$2 self=$3 self_name=$4 lock=${5:-}
     grace=${CLAUDE_WORKTREE_AGENT_GRACE_HOURS:-24}
@@ -311,7 +313,9 @@ compgen -G "$main/.claude/worktrees/agent-*" >/dev/null || exit 0
 [[ -d $common/worktrees ]] || exit 0
 
 sweep=("$BASH" "${BASH_SOURCE[0]}" --sweep "$main" "$top" "${agent:+agent-$agent}")
-if type -P flock >/dev/null; then
+# flock on a directory is util-linux's; it comes with setsid, and a flock
+# without one (Homebrew's on a Mac) may refuse a directory, so mkdir it is.
+if type -P flock >/dev/null && type -P setsid >/dev/null; then
     sweep=(flock -n "$common/worktrees" "${sweep[@]}")
 else
     sweep+=("$common/galdr-worktree-sweep.lock")

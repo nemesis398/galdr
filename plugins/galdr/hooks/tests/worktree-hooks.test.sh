@@ -900,6 +900,74 @@ elif [ "$(grep -cF "subagent-stop agent-$A1 $W1 removed" "$LOG")" != 1 ]; then b
 elif [ -e "$MAIN/$SWEEP_LOCK" ]; then bad "the lock directory was left behind"
 else ok; fi
 
+# sweep_lock's takeover rules, where the sweep takes the mkdir lock.
+if [ "$GALDR_USERLAND" != gnu ]; then
+    # pre_lock <pid> [<touch -d date>]: a lock directory as a sweep leaves it.
+    pre_lock() {
+        mkdir -p "$MAIN/$SWEEP_LOCK" && printf '%s\n' "$1" >"$MAIN/$SWEEP_LOCK/pid"
+        [ -z "${2:-}" ] || touch -d "$2" "$MAIN/$SWEEP_LOCK"
+    }
+
+    CASE="sweep_lock: a lock whose owner is dead is taken over, and the sweep runs"
+    make_repo
+    create "agent-$A2"; W2=$OUT
+    sh -c 'exit 0' & dead=$!; wait "$dead"
+    pre_lock "$dead"
+    stop "$W2" "$A2"
+    if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
+    elif ! sweep_done "subagent-stop agent-$A2 $W2 kept"; then bad "no sweep ran, or it left the lock: $(tail -n 1 "$LOG")"
+    else ok; fi
+
+    CASE="sweep_lock: a fresh lock whose owner lives means skip"
+    make_repo
+    create "agent-$A2"; W2=$OUT
+    pre_lock "$$"
+    lines=$(wc -l <"$LOG")
+    stop "$W2" "$A2"
+    sleep 1
+    if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
+    elif [ "$(wc -l <"$LOG")" != "$lines" ]; then bad "a sweep ran: $(tail -n 1 "$LOG")"
+    elif [ "$(cat "$MAIN/$SWEEP_LOCK/pid" 2>/dev/null)" != "$$" ]; then bad "the live owner's lock was touched"
+    else ok; fi
+    rm -rf -- "${MAIN:?}/$SWEEP_LOCK"
+
+    CASE="sweep_lock: a lock over an hour old is taken over, its owner alive or not"
+    make_repo
+    create "agent-$A2"; W2=$OUT
+    pre_lock "$$" "2 hours ago"
+    stop "$W2" "$A2"
+    if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
+    elif ! sweep_done "subagent-stop agent-$A2 $W2 kept"; then bad "no sweep ran, or it left the lock: $(tail -n 1 "$LOG")"
+    else ok; fi
+
+    # Homebrew's flock without setsid: the directory flock is util-linux's,
+    # so the sweep must take the mkdir lock. The stub refuses, as a flock
+    # that cannot lock a directory would.
+    CASE="flock_without_setsid: the sweep takes the mkdir lock, never flock"
+    FLOCK_STUB=$ROOT/flock-stub
+    mkdir -p "$FLOCK_STUB"
+    { printf '#!%s\n' "$BASH"; cat <<'EOF'
+printf 'flock %s\n' "$*" >>"$STUB_LOG"
+exit 1
+EOF
+    } >"$FLOCK_STUB/flock"
+    chmod +x "$FLOCK_STUB/flock"
+    FIX_TEARDOWN=1 make_repo
+    create "agent-$A1"; W1=$OUT
+    create "agent-$A2"; W2=$OUT
+    age "$W1" 2
+    : >"$STUB_LOG"
+    TEARDOWN_SLEEP=1 HOOK_PATH=$FLOCK_STUB:$HOOK_PATH stop "$W2" "$A2"
+    held=no
+    for _ in $(seq 1 100); do grep -qxF "teardown cwd=$W1" "$STUB_LOG" && break; sleep 0.1; done
+    read -r lpid <"$MAIN/$SWEEP_LOCK/pid" 2>/dev/null && kill -0 "$lpid" 2>/dev/null && held=yes
+    if   [ "$RC" -ne 0 ]; then bad "expected exit 0, got $RC"
+    elif ! sweep_done "subagent-stop agent-$A1 $W1 removed"; then bad "no removal logged: $(reason_for "$W1")"
+    elif grep -q '^flock' "$STUB_LOG"; then bad "flock was called: $(grep '^flock' "$STUB_LOG")"
+    elif [ "$held" != yes ]; then bad "during the teardown no live sweep held the mkdir lock"
+    else ok; fi
+fi
+
 CASE="the sweep never tears down a worktree it keeps"
 FIX_TEARDOWN=1 make_repo
 create "agent-$A1"; W1=$OUT
@@ -967,9 +1035,12 @@ hook_cmd() {
         .hooks[$e][]?.hooks[]? | select(.type == "command")
         | .command | strings | select(contains($s))' "$SPACE/hooks/hooks.json" 2>/dev/null
 }
-# run_cmd <command> <cwd> <json>: run_hook for a hooks.json command.
+# run_cmd <command> <cwd> <json>: run_hook for a hooks.json command. Its stdin
+# is a file: under bash 3.2 a hook exits before reading it, and a pipe could
+# then fail the writer with SIGPIPE, which pipefail turns into rc 141.
 run_cmd() {
-    (cd "$2" && printf '%s' "$3" | PATH=$HOOK_PATH CLAUDE_PLUGIN_ROOT=$SPACE "$BASH" -c "$1" >"$ROOT/out" 2>"$ROOT/err")
+    printf '%s' "$3" >"$ROOT/in"
+    (cd "$2" && PATH=$HOOK_PATH CLAUDE_PLUGIN_ROOT=$SPACE "$BASH" -c "$1" <"$ROOT/in" >"$ROOT/out" 2>"$ROOT/err")
     RC=$?
     OUT=$(<"$ROOT/out")
     ERR=$(<"$ROOT/err")

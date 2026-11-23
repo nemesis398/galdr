@@ -122,6 +122,7 @@ for t in plugins/galdr/*/tests/*.test.sh; do bash "$t" || echo "FAIL $t"; done
 The hook tests run each case three times: with the GNU tools, as macOS
 without `coreutils` (BSD `stat` and `date`, no `timeout`, `setsid` or
 `flock`), and as macOS with it; `tests/lib/bsd-shims.sh` plays the two Macs.
-`prune-claude-tmp.test.sh` needs Linux, where it needs unprivileged user
-namespaces, and skips elsewhere;
+The exception is `prune-claude-tmp.test.sh`: it runs each case once, on
+Linux only, plus one case under the BSD shims. It needs unprivileged user
+namespaces there, and skips elsewhere;
 `web-route.test.sh` needs `python3` for its fake server.

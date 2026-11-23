@@ -387,9 +387,12 @@ check "plugin-root-space: run as hooks.json writes it, it routes" '[[ $rc == 0 &
 # macOS's /bin/bash 3.2 runs the hook when no newer bash comes first in PATH.
 mkdir -p "$SB/bash3" && bash3_stub "$SB/bash3"
 reset
-out=$(printf '%s' "$(search q)" | env -i HOME="$SB/home" PATH="$SB/bash3:$STUBS:$SYS" \
+# stdin from a file: the hook exits before reading it, so a pipe could fail
+# the writer with SIGPIPE and pipefail hand back 141.
+printf '%s' "$(search q)" >"$SB/in"
+out=$(env -i HOME="$SB/home" PATH="$SB/bash3:$STUBS:$SYS" \
     XDG_STATE_HOME="$SB/state" SEARXNG_URL="$URL" CLAUDE_PLUGIN_ROOT="$SPACE" \
-    "$BASH" -c "$cmd" 2>"$SB/err")
+    "$BASH" -c "$cmd" <"$SB/in" 2>"$SB/err")
 rc=$? err=$(<"$SB/err")
 check "bash3_silent: under bash 3.2 it exits 0, says nothing and probes nothing" \
     '[[ $rc == 0 && -z $out && -z $err && ! -s $SB/probes.log ]]'
