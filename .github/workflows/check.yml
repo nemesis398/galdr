@@ -41,6 +41,23 @@ jobs:
             [ -f "$t" ] && bash "$t"
           done
 
+  # The hook tests on an Intel Mac: BSD stat, date and find, no setsid, flock
+  # or timeout, and no GNU coreutils, so the ports are tested without the
+  # g-prefixed tools. Homebrew's bash runs them, as on a user's Mac.
+  shell-macos:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install bash and jq
+        run: brew install bash jq
+      - name: Run the hook tests under Homebrew bash
+        run: |
+          export PATH="$(brew --prefix)/bin:$PATH"
+          bash --version | head -n1
+          for t in plugins/*/*/tests/*.test.sh; do
+            [ -f "$t" ] && bash "$t"
+          done
+
   markdown:
     runs-on: ubuntu-latest
     steps:
