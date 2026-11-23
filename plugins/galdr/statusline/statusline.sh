@@ -138,7 +138,7 @@ env_ok="" parent_names=" "
 if mapfile -d '' -t parent_env 2>/dev/null </proc/"$PPID"/environ; then
     env_ok=1
     for kv in "${parent_env[@]}"; do
-        parent_names+="${kv%%=*} "
+        [[ $kv == *=?* ]] && parent_names+="${kv%%=*} "
         if [[ -z $kind && $kv == CLAUDE_CODE_SESSION_KIND=* ]]; then kind=${kv#*=}; fi
     done
 fi

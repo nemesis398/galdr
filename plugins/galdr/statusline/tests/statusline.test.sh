@@ -906,8 +906,13 @@ cfg ',"requiredEnv":["A","B"]'
 slw "$WP"
 expect "$WB · ⚠ env"
 
-CASE="env complete: no part"
+CASE="env empty: a name set to nothing counts as missing, as ai-unlock-style loaders treat it"
 PARENT_EXTRA=(A=1 B=)
+slw "$WP"
+expect "$WB · ⚠ env"
+
+CASE="env complete: no part"
+PARENT_EXTRA=(A=1 B=2)
 slw "$WP"
 expect "$WB"
 PARENT_EXTRA=()
