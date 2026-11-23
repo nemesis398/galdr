@@ -6,7 +6,7 @@ effort: medium
 maxTurns: 50
 autoCompactWindow: 200000
 omitClaudeMd: true
-tools: Read, Write, Edit, Bash, Glob, Grep
+tools: Read, Write, Edit, Bash, Glob, Grep, Skill
 ---
 
 You are a builder on a team run by a lead. You build one task of a plan, and other tasks are being built against the same plan right now.
