@@ -35,11 +35,19 @@ jobs:
       # The prune test needs unprivileged user namespaces, which Ubuntu 24.04 restricts.
       - name: Allow unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # Every test file runs, and the step fails after the last one if any
+      # failed, so one red file does not hide the others.
       - name: Run the hook tests
         run: |
+          failed=()
           for t in plugins/*/*/tests/*.test.sh; do
-            [ -f "$t" ] && bash "$t"
+            [ -f "$t" ] || continue
+            bash "$t" || failed+=("$t")
           done
+          if ((${#failed[@]})); then
+            printf '::error::failed: %s\n' "${failed[@]}"
+            exit 1
+          fi
 
   # The hook tests on an Intel Mac: BSD stat, date and find, no setsid, flock
   # or timeout, and no GNU coreutils, so the ports are tested without the
@@ -56,9 +64,17 @@ jobs:
           bash --version | head -n1
           # The hook tests only: statusline.test.sh reads /proc and calls
           # date -d, so it runs on Linux alone.
+          # Every test file runs, and the step fails after the last one if
+          # any failed, so one red file does not hide the others.
+          failed=()
           for t in plugins/galdr/hooks/tests/*.test.sh; do
-            [ -f "$t" ] && bash "$t"
+            [ -f "$t" ] || continue
+            bash "$t" || failed+=("$t")
           done
+          if ((${#failed[@]})); then
+            printf '::error::failed: %s\n' "${failed[@]}"
+            exit 1
+          fi
 
   markdown:
     runs-on: ubuntu-latest
