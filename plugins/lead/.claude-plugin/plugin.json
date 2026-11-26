@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "lead",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Run a plan as a lead with subagents: four task categories (scout, edit, build, review) on one ladder of model and effort, fresh workers with fix lists, and climbing one rung per failure.",
   "author": {
     "name": "nemesis398",

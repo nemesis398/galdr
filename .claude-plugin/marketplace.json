@@ -36,13 +36,18 @@
     },
     {
       "name": "journal",
-      "source": {"source": "github", "repo": "nemesis398/journal", "ref": "v0.2.0"},
+      "source": {"source": "github", "repo": "nemesis398/journal", "ref": "v0.3.0"},
       "description": "Session notes: the noteworthy work of a session, under fixed sections."
     },
     {
       "name": "ai-memory",
-      "source": {"source": "github", "repo": "nemesis398/ai-memory", "ref": "v0.2.0"},
+      "source": {"source": "github", "repo": "nemesis398/ai-memory", "ref": "v0.2.1"},
       "description": "Memory notes: one fact per note, with a flat format that retrieval can inject."
+    },
+    {
+      "name": "mimir",
+      "source": {"source": "github", "repo": "nemesis398/mimir", "ref": "v0.1.0"},
+      "description": "Vault structure: one config checks an Obsidian vault, counts plan progress, splits long notes and starts new ones."
     },
     {
       "name": "simplify-changes",
