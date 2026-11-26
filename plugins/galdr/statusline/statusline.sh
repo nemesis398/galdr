@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # statusline.sh: the Claude Code status line (the plugin's README says how
 # to wire it as the statusLine command). Prints two lines, every part
-# only when its data exists, and a line with no part is not printed (with
-# neither line, one empty line is):
-#   line 1: <model> <effort> · ctx <n>% · 5h <n>% ↻<HH:MM> · wk <n>% ↻<Mo> ·
+# only when its data exists, and a line with no part is not printed (the
+# host tag always leads line 1, so line 1 always prints):
+#   line 1: <host> · <model> <effort> · ctx <n>% · 5h <n>% ↻<HH:MM> · wk <n>% ↻<Mo> ·
 #           <Model> <n>% ... · cache <n>m · credits <used>/<limit> €
-#   line 2: [<host> · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] ·
+#   line 2: [bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] ·
 #           plan <name> <n>%|✓ · 🔑 <label> ✓|✗ ... · ⚠ <hint> ·
 #           ⚠ <n> sessions here · ⚠ /tmp <n>%
 # The project is workspace.project_dir with $HOME as ~ (whole components
@@ -55,21 +55,18 @@
 # without opening /usage. The limits and the cache age are what otherwise
 # surprise a long session, the first as a refusal and the second as a bill.
 #
-# The host stays on screen only where it tells something. The machines where
-# ordinary sessions run are quiet: the config key statusline.quietHosts
-# lists them, each a name without a domain, matched whole and in its case.
-# Any other machine prints its name at the front, on the accent fill,
-# because a session on another machine or over SSH looks the same as a
-# local one otherwise. Where a session runs is place, and place gets the
-# accent: reverse video on the bright magenta slot, which
-# the theme gives the accent, so the name takes the terminal's background.
-# Without the list, or when it cannot be read, every machine prints its tag:
-# a tag too many costs a few columns, a tag too few hides where the session
-# runs. The tag prints even when stdin is empty or garbage and jq is missing.
+# The host leads line 1 on every machine, before the model, because a
+# session on another machine or over SSH looks the same as a local one
+# otherwise. Where a session runs is place, and place gets the accent:
+# reverse video on the bright magenta slot, which the theme gives the
+# accent, so the name takes the terminal's background. The tag prints even
+# when stdin is empty or garbage and jq is missing (line 1 is then the tag
+# alone). The config key statusline.quietHosts, which used to silence the
+# tag on chosen hosts, is retired: a config that still has it is ignored.
 #
 # The config is the JSON file that GALDR_CONFIG names, else
 # ${XDG_CONFIG_HOME:-~/.config}/galdr/config.json. A file that is missing,
-# empty or not JSON makes no host quiet.
+# empty or not JSON makes the keys below take their defaults.
 #
 # The host is $HOSTNAME without a domain. Bash keeps an inherited HOSTNAME
 # (some distributions' /etc/profile export one, and the tests set one), and
@@ -81,7 +78,7 @@
 # script reads it from its parent's environment, which is the claude process.
 #
 # The rest comes from the session JSON on stdin, in the same jq call that
-# reads the quiet hosts:
+# reads the config:
 #   - model.display_name, then effort.level, which is absent on a model
 #     without the effort parameter;
 #   - context_window.used_percentage, null before the first response. Like
@@ -144,19 +141,13 @@ if mapfile -d '' -t parent_env 2>/dev/null <"${GALDR_PROC:-/proc}/$PPID/environ"
         if [[ -z $kind && $kv == CLAUDE_CODE_SESSION_KIND=* ]]; then kind=${kv#*=}; fi
     done
 fi
-# One output line: q when the host is quiet and t when it gets its tag, a
-# tab, and the parts joined. Only the first JSON value on stdin is read, and
+# One output line: the fields joined by tabs. Only the first JSON value on stdin is read, and
 # input that does not parse counts as none. Every path step carries a ?, so a
 # field of the wrong type, or input that is no object at all, drops a part
-# instead of failing; values that do not parse, or hold no list of names,
-# make no host quiet. The jq variables ($c, $n, ...) must reach jq
+# instead of failing. The jq variables ($c, $n, ...) must reach jq
 # unexpanded.
 # shellcheck disable=SC2016
 prog='
-def quiet:
-    ($values | try fromjson catch null)
-    | [(objects | .statusline? | objects | .quietHosts? | arrays | .[] | strings)]
-    | any(.[]; . == $host);
 def text(f): ((f)? | select(type == "string")) // "" | gsub("[[:cntrl:]]"; "");
 def used: (.used_percentage? // .utilization?) | numbers;
 def lim:
@@ -225,8 +216,7 @@ def body:
 ] | map(select(. != "")) | join(" · ");
 
 (try input catch null) as $in
-| [(if quiet then "q" else "t" end),
-   ($in | body),
+| [($in | body),
    ($in | text(.workspace?.project_dir)),
    ($in | text(.workspace?.current_dir)),
    ($in | text(.session_id) | gsub("[^A-Za-z0-9-]"; "")),
@@ -239,18 +229,18 @@ def body:
 # Every field leads with _, which is stripped below: read splits on a tab as
 # on white space, so an empty field would otherwise swallow its neighbour.
 fields=()
-IFS=$'\t' read -r -a fields <<<"$(jq -nr --arg c "$color_on" --arg host "$host" \
+IFS=$'\t' read -r -a fields <<<"$(jq -nr --arg c "$color_on" \
     --rawfile values "$values" "$prog" 2>/dev/null)"
 for i in "${!fields[@]}"; do fields[i]=${fields[i]#_}; done
-quiet=${fields[0]} line1=${fields[1]} project_dir=${fields[2]}
-current_dir=${fields[3]} session_id=${fields[4]}
+line1=${fields[0]} project_dir=${fields[1]}
+current_dir=${fields[2]} session_id=${fields[3]}
 # The labels come as one field, joined by \x1f, which no label can hold, so
 # the fields keep their places and later ones follow this one.
 ssh_labels=()
-[[ -n ${fields[5]-} ]] && IFS=$'\x1f' read -r -a ssh_labels <<<"${fields[5]}"
+[[ -n ${fields[4]-} ]] && IFS=$'\x1f' read -r -a ssh_labels <<<"${fields[4]}"
 required_env=()
-[[ -n ${fields[6]-} ]] && IFS=$'\x1f' read -r -a required_env <<<"${fields[6]}"
-env_hint=${fields[7]-} tmp_path=${fields[8]:-/tmp} tmp_share=${fields[9]-}
+[[ -n ${fields[5]-} ]] && IFS=$'\x1f' read -r -a required_env <<<"${fields[5]}"
+env_hint=${fields[6]-} tmp_path=${fields[7]:-/tmp} tmp_share=${fields[8]-}
 
 # short_path <abs>: sets short to the path with $HOME as ~, on a whole
 # component only, so /home/user2 is not ~2 under HOME=/home/user. It sets a
@@ -323,13 +313,6 @@ plan_of() {
 
 # Line 2, one part at a time, joined with " · ". Later parts append to parts.
 parts=()
-if [[ $quiet != q ]]; then
-    if [[ -n $color_on ]]; then
-        parts+=($'\e[7;95m'"$host"$'\e[0m')
-    else
-        parts+=("$host")
-    fi
-fi
 if [[ $kind == bg ]]; then
     parts+=("bg${session_id:+ ${session_id:0:8}}")
 fi
@@ -426,7 +409,9 @@ fi
 line2=""
 for part in "${parts[@]}"; do line2+=${line2:+ · }$part; done
 
-if [[ -n $line1 ]]; then printf '%s\n' "$line1"; fi
-if [[ -n $line2 ]]; then printf '%s\n' "$line2"
-elif [[ -z $line1 ]]; then printf '\n'; fi
+# The host tag leads line 1, which therefore always prints.
+tag=$host
+[[ -n $color_on ]] && tag=$'\e[7;95m'$host$'\e[0m'
+printf '%s\n' "$tag${line1:+ · $line1}"
+if [[ -n $line2 ]]; then printf '%s\n' "$line2"; fi
 exit 0

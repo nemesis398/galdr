@@ -67,9 +67,11 @@ error. A symbolic link at a fixed path, renewed after an update, keeps the
 setting stable.
 
 The status line prints two lines, each part only when its data exists, and
-a line with no part is not printed. Line 1 is the budget: model and effort,
-context, the 5h and weekly limits, the cache age, credits. Line 2 is place
-and work: `[host · ][bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] · plan <name> <n>% · 🔑 <label> ✓|✗ ...`. The
+a line with no part is not printed. Line 1 starts with the host tag on every
+machine (the name without a domain, reverse video on the accent), then the
+budget: model and effort, context, the 5h and weekly limits, the cache age,
+credits. The tag prints even when stdin is empty or jq is missing. Line 2 is
+place and work: `[bg <id8> · ]<project> [↳ <dir>] · <branch> [wt] · plan <name> <n>% · 🔑 <label> ✓|✗ ...`. The
 project is `workspace.project_dir` with `$HOME` shown as `~`. `↳` follows
 when the current directory is below it (its relative path) or outside it
 (its own path). The branch is read from `.git/HEAD` (a short sha when
@@ -127,7 +129,7 @@ part off and fails in no other way.
 | `vault.rule` | string, a sentence or two | `session-preflight.sh` | the vault's rule is to change nothing in it without the user's go-ahead |
 | `netbird.managementUrl` | string, a URL | `session-preflight.sh` | no server counts as the wrong one, and a NeedsLogin names none |
 | `netbird.whenDown` | string, one sentence | `session-preflight.sh` | the NetBird warnings do not say what fails while the mesh is down |
-| `statusline.quietHosts` | list of host names, without a domain | `statusline.sh` | every host shows its tag |
+| `statusline.quietHosts` | retired | none | ignored: every host shows its tag at the front of line 1, and a config that still has the key is harmless |
 | `plans.dir` | string, an absolute path | `plan-track.sh` | no plan is recorded, and the status line shows none |
 | `statusline.sshHosts` | object, a label to an SSH host as `ssh` takes it | `ssh-sockets.sh`, `statusline.sh` | no SSH master is watched. A label or host that is empty or holds a control character, and a host that starts with `-`, is left out |
 | `statusline.requiredEnv` | list of variable names | `statusline.sh` | no environment check. Needs `/proc` |
@@ -150,7 +152,6 @@ For example:
     "whenDown": "While the mesh is down, the deploy server refuses every request."
   },
   "statusline": {
-    "quietHosts": ["laptop"],
     "sshHosts": { "forgejo": "git.example.org", "github": "github.com" }
   },
   "plans": { "dir": "/home/alice/Nextcloud/Notes/plans" }

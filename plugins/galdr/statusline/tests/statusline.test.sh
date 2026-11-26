@@ -15,11 +15,10 @@
 # script that starts calling another tool fails here first, with something on
 # stderr.
 #
-# The quiet hosts come from the galdr config. Every run gets
-# GALDR_CONFIG pointing at a file whose statusline.quietHosts is
-# ["laptop"], so laptop stands for the machine where ordinary sessions run,
-# and every other name for a machine that is not; a case passes its own
-# GALDR_CONFIG= to change that.
+# Every run gets GALDR_CONFIG pointing at a config file that still lists
+# laptop in the retired statusline.quietHosts, to show the key changes
+# nothing. run_sl drops the tag of HOSTNAME=laptop runs (see
+# drop_laptop_tag) unless RAW is set.
 #
 # The cache age is measured against the clock, so every payload is stamped
 # with an expiry relative to the moment it is built, 12 minutes and 30
@@ -91,6 +90,29 @@ run_sl() {
         <"$ROOT/in" >"$ROOT/out" 2>"$ROOT/err"
     RC=$?
     ERR=$(<"$ROOT/err")
+    [[ -n ${RAW:-} ]] || drop_laptop_tag "$@"
+}
+
+# drop_laptop_tag <run_sl's env pairs>: a run as HOSTNAME=laptop or
+# laptop.lan gets that host's tag off the front of line 1 in $ROOT/out, so
+# the cases about other things need not repeat it. The host cases set RAW=1
+# and see the tag itself. A line 1 that was the tag alone goes away, as a
+# line with no part does.
+drop_laptop_tag() {
+    local a hit="" out first rest
+    for a; do [[ $a == HOSTNAME=laptop || $a == HOSTNAME=laptop.lan ]] && hit=1; done
+    [[ -n $hit ]] || return 0
+    out=$(<"$ROOT/out")
+    first=${out%%$'\n'*}
+    rest=""
+    [[ $out == *$'\n'* ]] && rest=${out#*$'\n'}
+    first=${first#"${TAG}laptop${RESET}"}
+    [[ $first == laptop* ]] && first=${first#laptop}
+    first=${first# · }
+    if [[ -n $first && -n $rest ]]; then out=$first$'\n'$rest
+    elif [[ -n $first ]]; then out=$first
+    else out=$rest; fi
+    printf '%s\n' "$out" >"$ROOT/out"
 }
 
 # expect <line>: exit 0, nothing on stderr, and stdout exactly <line> plus a newline.
@@ -127,9 +149,8 @@ P_MODEL="Haiku 4.5" P_CTX="ctx 19%" P_CACHE="cache 12m" P_SID=c0ffee00
 P_5H="5h 30% ↻$(hm $FIVE_AT)" P_WK="wk 6% ↻$(wd $WEEK_AT)"
 BODY=$(join "$P_MODEL" "$P_CTX" "$P_5H" "$P_WK" "$P_CACHE")
 
-# The host tag the script prints for a host name: none on laptop, the quiet
-# host of the default values, else the name on the accent fill.
-host_tag() { [ "$1" = laptop ] || printf '%s' "${TAG}$1${RESET}"; }
+# The host tag the script prints for a host name: the name on the accent fill.
+host_tag() { printf '%s' "${TAG}$1${RESET}"; }
 
 # The kernel's name for this machine, as the script falls back to it.
 read -r kernel_host </proc/sys/kernel/hostname
@@ -139,25 +160,32 @@ kernel_host=${kernel_host%%.*}
 
 echo "the host"
 
-CASE="a quiet host prints no host, only the parts of a real payload"
+# These cases see the tag itself, so run_sl must not drop laptop's.
+RAW=1
+
+CASE="every host leads line 1 with its tag, laptop too, and line 2 has none"
 run_sl "$(fresh)" HOSTNAME=laptop
-expect "$BODY"
+expect "$(host_tag laptop) · $BODY"
 
-CASE="a domain on a quiet host's name does not make it another host"
+CASE="a domain on the name is dropped, and the tag is the name itself"
 run_sl "$(fresh)" HOSTNAME=laptop.lan
-expect "$BODY"
+expect "$(host_tag laptop) · $BODY"
 
-CASE="any other host prints as it is, on the accent fill, at the front"
+CASE="any other host prints as it is, on the accent fill, before the model"
 run_sl "$(fresh)" HOSTNAME=build-box
-expect "$BODY"$'\n'"$(host_tag build-box)"
+expect "$(host_tag build-box) · $BODY"
 
-CASE="the tag is the name itself: no prefix is dropped, and there is no table of known hosts"
+CASE="no prefix is dropped, and there is no table of known hosts"
 run_sl "$(fresh)" HOSTNAME=old-laptop
-expect "$BODY"$'\n'"${TAG}old-laptop${RESET}"
+expect "${TAG}old-laptop${RESET} · $BODY"
 
-CASE="a domain on the name is dropped before the match"
-run_sl "$(fresh)" HOSTNAME=other-host.lan
-expect "$BODY"$'\n'"$(host_tag other-host)"
+CASE="the tag stays on line 1 when line 2 has parts, and bg opens line 2"
+PARENT_KIND='bg' run_sl "$(fresh)" HOSTNAME=other-host.lan
+expect "$(host_tag other-host) · $BODY"$'\n'"bg $P_SID"
+
+CASE="with no other line 1 parts the tag is line 1 alone"
+run_sl "$(edit 'del(.model, .context_window, .rate_limits, .prompt_cache)')" HOSTNAME=build-box
+expect "$(host_tag build-box)"
 
 CASE="with no HOSTNAME in the environment, bash's own (the kernel's) name decides"
 run_sl "" NO_COLOR=1 GALDR_CONFIG="$ROOT/no-values.json"
@@ -175,85 +203,48 @@ CASE="a HOSTNAME of control characters alone counts as none"
 run_sl "" HOSTNAME=$'\e\a' NO_COLOR=1 GALDR_CONFIG="$ROOT/no-values.json"
 expect "$kernel_host"
 
-CASE="the kernel's name is quiet when the values list it"
+# --- statusline.quietHosts is retired ---------------------------------------------
+
+echo "statusline.quietHosts is retired"
+
+CASE="a host the config lists in quietHosts still leads line 1 with its tag"
+run_sl "$(fresh)" HOSTNAME=laptop
+expect "$(host_tag laptop) · $BODY"
+
+CASE="the kernel's name gets its tag although the values list it"
 values "$(jq -cn --arg h "$kernel_host" '{statusline: {quietHosts: [$h]}}')"
 run_sl "" HOSTNAME= NO_COLOR=1 GALDR_CONFIG="$ROOT/v.json"
-expect ""
+expect "$kernel_host"
 
-# --- the quiet hosts --------------------------------------------------------------
-
-echo "the quiet hosts"
-
-values '{"statusline":{"quietHosts":["laptop","server"]}}'
-for h in laptop server; do
-    CASE="every host statusline.quietHosts lists is quiet ($h of two)"
-    run_sl "$(fresh)" HOSTNAME=$h GALDR_CONFIG="$ROOT/v.json"
-    expect "$BODY"
-done
-
-CASE="a host the list leaves out still gets its tag"
-run_sl "$(fresh)" HOSTNAME=build-box GALDR_CONFIG="$ROOT/v.json"
-expect "$BODY"$'\n'"$(host_tag build-box)"
-
-CASE="without a values file every host gets its tag, laptop too"
-run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT/no-values.json"
-expect "$BODY"$'\n'"${TAG}laptop${RESET}"
-
-CASE="a values path that is a directory: every host gets its tag"
-run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT"
-expect "$BODY"$'\n'"${TAG}laptop${RESET}"
-
-CASE="an empty list makes no host quiet"
-values '{"statusline":{"quietHosts":[]}}'
-run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT/v.json"
-expect "$BODY"$'\n'"${TAG}laptop${RESET}"
-
-for bad in '' 'not json' '{"statusline":' '[1,2]' '"laptop"' 'null' '{"statusline":"laptop"}' \
-    '{"statusline":{"quietHosts":"laptop"}}' '{"statusline":{"quietHosts":{"laptop":true}}}' \
-    '{"statusline":{"quietHosts":[["laptop"]]}}' '{"statusline":{"quietHosts":[{"name":"laptop"}]}}'; do
-    CASE="values without a usable list ($bad): the tag prints, and the rest of the line too"
-    values "$bad"
+for cfg_text in '{"statusline":{"quietHosts":["laptop","server"]}}' '{"statusline":{"quietHosts":[]}}' \
+    '{"statusline":{"quietHosts":"laptop"}}' '{"statusline":{"quietHosts":[42,null,{"a":1}]}}' \
+    '' 'not json' '{"statusline":' '[1,2]' 'null' '{"statusline":"laptop"}'; do
+    CASE="whatever the config holds ($cfg_text), the tag leads line 1"
+    values "$cfg_text"
     run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT/v.json"
-    expect "$BODY"$'\n'"${TAG}laptop${RESET}"
+    expect "$(host_tag laptop) · $BODY"
 done
 
-CASE="entries that are no string are skipped, and the strings still count"
-values '{"statusline":{"quietHosts":[42,null,true,"laptop"]}}'
-run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT/v.json"
-expect "$BODY"
+CASE="without a config file, a directory as the config, or no HOME the tag leads line 1"
+run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT/no-values.json"
+expect "$(host_tag laptop) · $BODY"
+run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT"
+expect "$(host_tag laptop) · $BODY"
+run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG=
+expect "$(host_tag laptop) · $BODY"
 
-CASE="only the whole name matches, in its own case: no prefix, no longer name, no domain"
-values '{"statusline":{"quietHosts":["hug","laptop2","LAPTOP","laptop.lan"," laptop"]}}'
-run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT/v.json"
-expect "$BODY"$'\n'"${TAG}laptop${RESET}"
-
-CASE="other keys in the values change nothing"
-values '{"web":{"searxngUrl":"http://127.0.0.1:1"},"statusline":{"quietHosts":["laptop"],"other":1}}'
-run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT/v.json"
-expect "$BODY"
-
-CASE="the values are read from ~/.config/galdr/config.json without GALDR_CONFIG"
+CASE="the default config file is still read for the other keys: the tag is the same with or without it"
 mkdir -p "$ROOT/home/.config/galdr"
 printf '%s\n' "$QUIET" >"$ROOT/home/.config/galdr/config.json"
 run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG= HOME="$ROOT/home"
-expect "$BODY"
+expect "$(host_tag laptop) · $BODY"
 
-CASE="XDG_CONFIG_HOME moves the default values file"
-run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG= HOME="$ROOT/home" XDG_CONFIG_HOME="$ROOT/elsewhere"
-expect "$BODY"$'\n'"${TAG}laptop${RESET}"
-mkdir -p "$ROOT/elsewhere/galdr"
-cp "$ROOT/home/.config/galdr/config.json" "$ROOT/elsewhere/galdr/"
-run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG= HOME="$ROOT/home" XDG_CONFIG_HOME="$ROOT/elsewhere"
-expect "$BODY"
-
-CASE="with neither HOME nor GALDR_CONFIG no file is read and the host gets its tag"
-run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG=
-expect "$BODY"$'\n'"${TAG}laptop${RESET}"
-
-CASE="a values file that is a large JSON document is read all the same"
+CASE="a large config document changes nothing"
 jq -cn '{padding: [range(20000) | "x\(.)"], statusline: {quietHosts: ["laptop"]}}' >"$ROOT/v.json"
 run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="$ROOT/v.json"
-expect "$BODY"
+expect "$(host_tag laptop) · $BODY"
+
+unset RAW
 
 # --- the session kind -------------------------------------------------------------
 
@@ -262,10 +253,6 @@ echo "the session kind"
 CASE="bg in the parent's environment only, as in a real worker, prints bg first on a quiet host"
 PARENT_KIND='bg' run_sl "$(fresh)" HOSTNAME=laptop
 expect "$BODY"$'\n'"bg $P_SID"
-
-CASE="bg comes after the host tag on another host"
-PARENT_KIND='bg' run_sl "$(fresh)" HOSTNAME=other-host
-expect "$BODY"$'\n'"$(host_tag other-host) · bg $P_SID"
 
 CASE="bg in the script's own environment prints bg too"
 run_sl "$(fresh)" HOSTNAME=laptop CLAUDE_CODE_SESSION_KIND=bg
@@ -279,9 +266,9 @@ expect "$BODY"
 
 echo "input that is not usable"
 
-CASE="empty stdin on a quiet host prints an empty line"
-run_sl "" HOSTNAME=laptop
-expect ""
+CASE="empty stdin prints the host tag alone, laptop's too"
+RAW=1 run_sl "" HOSTNAME=laptop
+expect "$(host_tag laptop)"
 
 CASE="empty stdin elsewhere prints the host tag alone"
 run_sl "" HOSTNAME=other-host
@@ -290,10 +277,6 @@ expect "$(host_tag other-host)"
 CASE="malformed JSON prints the host tag alone"
 run_sl '{"model": {"display_name": "Opus", ' HOSTNAME=other-host
 expect "$(host_tag other-host)"
-
-CASE="malformed JSON on a quiet host prints an empty line: the values are still read"
-run_sl '{"model": {"display_name": "Opus", ' HOSTNAME=laptop
-expect ""
 
 CASE="stdin that is not UTF-8 prints the host tag alone"
 run_sl $'\xff\xfe{"session_id":"x"}' HOSTNAME=other-host
@@ -309,13 +292,9 @@ CASE="of two JSON values only the first counts"
 run_sl '{"model":{"display_name":"First"}} {"model":{"display_name":"Second"}}' HOSTNAME=laptop
 expect "First"
 
-CASE="with jq missing from PATH the host tag and bg still print, and nothing reaches stderr"
-PARENT_KIND='bg' run_sl "$(fresh)" HOSTNAME=other-host PATH="$NO_JQ"
-expect "$(host_tag other-host) · bg"
-
-CASE="with jq missing a quiet host gets its tag too, because the values cannot be read"
-PARENT_KIND='bg' run_sl "$(fresh)" HOSTNAME=laptop PATH="$NO_JQ"
-expect "$(printf '%s' "${TAG}laptop${RESET}") · bg"
+CASE="with jq missing from PATH the host tag is line 1 and bg line 2, and nothing reaches stderr"
+RAW=1 PARENT_KIND='bg' run_sl "$(fresh)" HOSTNAME=other-host PATH="$NO_JQ"
+expect "$(host_tag other-host)"$'\n'"bg"
 
 # --- the fields --------------------------------------------------------------------
 
@@ -669,9 +648,9 @@ CASE="without bg the session id is nowhere"
 run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H"
 if grep -q "$P_SID" "$ROOT/out"; then bad "the id was printed"; else ok; fi
 
-CASE="the host tag and bg come before the project"
+CASE="the host tag leads line 1 and bg comes before the project on line 2"
 PARENT_KIND='bg' run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=other-host HOME="$H"
-expect "$BODY"$'\n'"$(host_tag other-host) · bg $P_SID · ~/proj · main"
+expect "$(host_tag other-host) · $BODY"$'\n'"bg $P_SID · ~/proj · main"
 
 CASE="a session id that is no plain id is cleaned to [A-Za-z0-9-]"
 PARENT_KIND='bg' run_sl "$(placed "$H/proj" "$H/proj" '.session_id = "../x/y z"')" HOSTNAME=laptop HOME="$H"
@@ -685,9 +664,9 @@ CASE="a workspace with no project prints no project part"
 run_sl "$(placed "" "$H/proj")" HOSTNAME=laptop HOME="$H"
 expect "$BODY"
 
-CASE="garbage stdin and bg: the host tag and bg alone, on one line"
+CASE="garbage stdin and bg: the host tag on line 1, bg alone on line 2"
 PARENT_KIND='bg' run_sl 'not json' HOSTNAME=other-host HOME="$H"
-expect "$(host_tag other-host) · bg"
+expect "$(host_tag other-host)"$'\n'"bg"
 
 # --- the plan ----------------------------------------------------------------------
 
@@ -880,7 +859,7 @@ sl_ssh "$(placed "" "")"
 expect "$BODY"$'\n'"🔑 forgejo ✓"
 
 CASE="no jq: the host tag alone, no key"
-sl_ssh "$(placed "$H/proj" "$H/proj")" PATH="$NO_JQ"
+RAW=1 sl_ssh "$(placed "$H/proj" "$H/proj")" PATH="$NO_JQ"
 expect "${TAG}laptop${RESET}"
 rm -f -- "$SSTATE/ssh-sockets"
 
@@ -890,24 +869,24 @@ echo "NO_COLOR"
 
 CASE="NO_COLOR=1 prints no escape sequence at all, host tag and limits included"
 run_sl "$(edit '.rate_limits.five_hour.used_percentage = 95 | .rate_limits.seven_day.used_percentage = 75')" HOSTNAME=build-box NO_COLOR=1
-expect "$(join "$P_MODEL" "$P_CTX" "5h 95% ↻$(hm $FIVE_AT)" "wk 75% ↻$(wd $WEEK_AT)" "$P_CACHE")"$'\n'"build-box"
+expect "$(join build-box "$P_MODEL" "$P_CTX" "5h 95% ↻$(hm $FIVE_AT)" "wk 75% ↻$(wd $WEEK_AT)" "$P_CACHE")"
 
 CASE="an empty NO_COLOR leaves the colors on, as no-color.org defines it"
 run_sl "$(edit '.rate_limits.five_hour.used_percentage = 95')" HOSTNAME=build-box NO_COLOR=
-expect "$(join "$P_MODEL" "$P_CTX" "5h ${RED}95%${RESET} ↻$(hm $FIVE_AT)" "$P_WK" "$P_CACHE")"$'\n'"$(host_tag build-box)"
+expect "$(join "$(host_tag build-box)" "$P_MODEL" "$P_CTX" "5h ${RED}95%${RESET} ↻$(hm $FIVE_AT)" "$P_WK" "$P_CACHE")"
 
 # --- the config file: missing, empty, malformed -----------------------------------
 
 echo "the config file"
 
 # A config the script cannot use is no config: exit 0, and the line it prints
-# without the file, which gives laptop its tag.
+# without the file, which leads with laptop's tag as ever.
 : >"$ROOT/empty-config.json"
 printf '{"statusline": {"quietHosts": ' >"$ROOT/malformed-config.json"
 for c in "missing:$ROOT/no-such-config.json" "empty:$ROOT/empty-config.json" "malformed:$ROOT/malformed-config.json"; do
     CASE="config-${c%%:*}: the line is the one without a file"
-    run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="${c#*:}"
-    expect "$BODY"$'\n'"${TAG}laptop${RESET}"
+    RAW=1 run_sl "$(fresh)" HOSTNAME=laptop GALDR_CONFIG="${c#*:}"
+    expect "$(host_tag laptop) · $BODY"
 done
 rm -f -- "$ROOT/empty-config.json" "$ROOT/malformed-config.json"
 

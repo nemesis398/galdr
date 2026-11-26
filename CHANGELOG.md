@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `galdr`: the status line leads line 1 with the host tag, before the model, on every machine, and line 2 no longer carries it. The tag still prints when stdin is empty or garbage or jq is missing. The config key `statusline.quietHosts` is retired: the script does not read it, and a config that still has it is ignored.
+
 ## 0.4.0 - 2026-11-26
 
 - `galdr` 0.4.0: `plan-track` knows split plans. Besides a `*.md` directly in `plans.dir`, it records a hub `<slug>/<slug>.md`, and an edit of a part `<slug>/<slug> – <section>.md`, also one folder deeper, records that part's hub, so the status line shows the hub and its progress. Symbolic links stay refused, the hub's included.
