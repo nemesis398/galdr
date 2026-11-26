@@ -29,7 +29,7 @@ Put all independent dispatches of a wave in one message.
 ```text
 You are building Task <n> of <plan path>, in <repo path>.
 Read the plan's "Global Constraints" and "Review Focus", your "Task <n>" section, and the Interfaces blocks of Tasks <m, ...>, which you consume from or produce for. Read nothing else unless they point to it.
-<If the plan is split:> Read the hub <hub path> first, then the part <part path> that holds your task; the hub's "Global Constraints" stand for the plan's.
+<If the plan is split:> Read the hub <hub path> first, then the part <part path> that holds your task; the hub's "Global Constraints" and "Review Focus" stand for the plan's, and the Interfaces blocks of Tasks <m, ...> are in their parts, listed under the hub's "## Parts".
 You own: <files>. Touch no other file.
 Check before finishing: <the task's gate command>.
 Budget: about <N> steps. Build nothing the task does not ask for.
@@ -46,7 +46,7 @@ rung; round 2, after a failed re-review, one rung up.
 Fix round <1|2> on Task <n> of <plan path>, in <repo path>. You own: <files>.
 1. <where> : <what is wrong> : <what correct looks like>
 2. ...
-Read the plan's "Task <n>" section only if an item needs it.
+Read the plan's "Task <n>" section only if an item needs it<; in a split plan it is in the part <part path>>.
 Check: <gate command>. Budget: about <N> steps.
 Report in 8 lines or fewer: what changed per item, check result, what is left.
 ```
@@ -59,6 +59,7 @@ before a repository goes public or for security-relevant code.
 ```text
 Review <Task <n> | the whole branch> of <plan path>, in <repo path>: <base>..<head>.
 Read the plan's "Global Constraints", "Review Focus" and <the task's section | all task sections>.
+<If the plan is split:> Read the hub <hub path>, which holds the Global Constraints and Review Focus, then <the part <part path> | every part listed under its "## Parts">.
 Judge the diff against them: correctness, the Interfaces blocks on both sides, tests that test the claim, the Review Focus items.
 Do not edit any file. Run read-only commands only; never fetch or push.
 Report the verdict in 8 lines or fewer: pass, or a fix list of at most five items (where, what is wrong, what correct looks like).
