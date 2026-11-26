@@ -29,6 +29,7 @@ Put all independent dispatches of a wave in one message.
 ```text
 You are building Task <n> of <plan path>, in <repo path>.
 Read the plan's "Global Constraints" and "Review Focus", your "Task <n>" section, and the Interfaces blocks of Tasks <m, ...>, which you consume from or produce for. Read nothing else unless they point to it.
+<If the plan is split:> Read the hub <hub path> first, then the part <part path> that holds your task; the hub's "Global Constraints" stand for the plan's.
 You own: <files>. Touch no other file.
 Check before finishing: <the task's gate command>.
 Budget: about <N> steps. Build nothing the task does not ask for.
