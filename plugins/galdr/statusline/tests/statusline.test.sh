@@ -694,7 +694,8 @@ expect "$(host_tag other-host) · bg"
 echo "the plan"
 
 # plan-track.sh records the plan a session edits in
-# $XDG_STATE_HOME/galdr/plan/<session id>, one line, its absolute path.
+# $XDG_STATE_HOME/galdr/plan/<session id>, one line, its absolute path. For
+# a split plan that is the hub, <slug>/<slug>.md, whichever part was edited.
 # track <path>: records <path> for the fixture's session.
 PL=$ROOT/plans PSTATE=$ROOT/state/galdr/plan
 P_SID_FULL=c0ffee00-1234-4abc-8def-000000000001
@@ -712,6 +713,13 @@ CASE="plan 71%: the plan this session edits, with its progress"
 track "$PL/2026-11-22-galdr.md"
 run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
 expect "$BODY"$'\n'"~/proj · main · plan galdr 71%"
+
+CASE="a split plan: the hub in its folder prints with the progress of hub and parts"
+mkdir -p "$PL/2026-11-26-mimir"
+printf -- '---\ntype: plan\nstatus: active\nprogress: 40\n---\n' >"$PL/2026-11-26-mimir/2026-11-26-mimir.md"
+track "$PL/2026-11-26-mimir/2026-11-26-mimir.md"
+run_sl "$(placed "$H/proj" "$H/proj")" HOSTNAME=laptop HOME="$H" XDG_STATE_HOME="$ROOT/state"
+expect "$BODY"$'\n'"~/proj · main · plan mimir 40%"
 
 CASE="plan done ✓: status done prints a check instead of the progress"
 track "$PL/2026-11-20-done.md"

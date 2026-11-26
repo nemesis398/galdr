@@ -77,7 +77,11 @@ detached, `wt` in a linked worktree), and nothing prints outside a
 repository. The session id (first 8 characters) shows only next to `bg`.
 
 The plan is the `*.md` file directly in `plans.dir` that the session last
-edited with Edit or Write, as the `plan-track` hook recorded it. Its name
+edited with Edit or Write, as the `plan-track` hook recorded it. A split
+plan is a folder in `plans.dir`: its hub is `<slug>/<slug>.md`, its parts
+are `<slug>/<slug> – <section>.md`, also one folder deeper for a part that
+was split again, and an edit of the hub or of any part records the hub,
+whose `progress` counts hub and parts together. Its name
 drops `.md` and a leading `YYYY-MM-DD-`, so `2026-11-22-galdr.md` prints as
 `galdr`. The percentage is the frontmatter's `progress:`, and `status: done`
 prints `✓` instead. A plan that was moved or deleted, or has no frontmatter,

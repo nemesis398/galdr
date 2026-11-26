@@ -13,7 +13,13 @@
 # A plan is a *.md file directly in the directory the config key plans.dir
 # names (an absolute path), read from the file GALDR_CONFIG names, else from
 # ${XDG_CONFIG_HOME:-~/.config}/galdr/config.json. Without the key, nothing
-# is recorded. The record is one line, the plan's absolute path, in
+# is recorded. A split plan is a folder in plans.dir: its hub is
+# <slug>/<slug>.md, its parts are <slug>/<slug> – <section>.md, and a part
+# split deeper is a folder <slug>/<slug> – <section>/ whose own notes are
+# named after it the same way. An edit of the hub or of any of its parts
+# records the hub, because the hub's progress counts all of them; a part
+# whose hub is missing or a symbolic link records nothing. The record is one
+# line, the plan's absolute path, in
 #
 #   ${XDG_STATE_HOME:-~/.local/state}/galdr/plan/<session id>
 #
@@ -26,10 +32,11 @@
 # trusted. The id is cleaned to [A-Za-z0-9-], the way the status line cleans
 # it, so the state file is always a plain name in galdr/plan/; an id with
 # nothing left writes nothing. The path must be absolute, name an existing
-# regular file that is no symbolic link, and its directory must be plans.dir
-# once both are resolved with `cd -P` (a builtin, so no readlink -f, which
-# macOS lacks): `..`, a symlinked parent and a trailing slash all compare as
-# the directories they lead to. A path or a plans.dir with a control
+# regular file that is no symbolic link, and its directory must be plans.dir,
+# or a hub's folder in it, once both are resolved with `cd -P` (a builtin, so
+# no readlink -f, which macOS lacks): `..`, a symlinked parent and a trailing
+# slash all compare as the directories they lead to, so a hub folder that
+# links outside plans.dir is no hub folder. A path or a plans.dir with a control
 # character in it is no path. The path recorded is the resolved one.
 #
 # Fails open on everything: no jq, input or config that does not parse, an
@@ -68,8 +75,27 @@ base=${file##*/} parent=${file%/*}
 cd -P -- "${parent:-/}" 2>/dev/null || exit 0
 parent=$PWD
 cd -P -- "$dir" 2>/dev/null || exit 0
-[[ $PWD == "$parent" ]] || exit 0
-plan=${parent%/}/$base
+dir=$PWD
+
+# Directly in plans.dir, the file is the plan. One folder down, the folder
+# is the hub's (slug is top); two down, it is a part's folder in the hub's,
+# named "<top> – <section>". Either way the file is that folder's own note
+# or one of its parts, and the plan is the hub.
+if [[ $parent == "$dir" ]]; then
+    plan=${parent%/}/$base
+else
+    slug=${parent##*/} up=${parent%/*}
+    if [[ ${up:-/} == "$dir" ]]; then
+        top=$slug hubdir=$parent
+    else
+        top=${up##*/} above=${up%/*}
+        [[ ${above:-/} == "$dir" && $slug == "$top – "?* ]] || exit 0
+        hubdir=$up
+    fi
+    [[ $base == "$slug.md" || $base == "$slug – "?*.md ]] || exit 0
+    plan=$hubdir/$top.md
+    [[ -f $plan && ! -L $plan ]] || exit 0
+fi
 
 # The braces come first so the shell's own "no such file" goes to /dev/null
 # too: a redirection is opened before a later 2> takes effect.

@@ -8,7 +8,11 @@
 # galdr/plan/. The path decides whether a file is a plan, so cases feed it
 # `..`, a symbolic link to a directory outside plans.dir, a subdirectory, a
 # linked file and a trailing slash on plans.dir, and check that only a *.md
-# directly in plans.dir is recorded, under its resolved path.
+# directly in plans.dir, or a split plan's hub or part, is recorded, under
+# its resolved path. A split plan's hub is <slug>/<slug>.md, its parts are
+# <slug>/<slug> – *.md and one folder deeper, and every one of them records
+# the hub, so cases check that a part, a deeper part and the hub record the
+# hub, and that a linked part, a linked hub and a linked hub folder do not.
 #
 # The hook runs with a PATH of links to the tools it may use and nothing
 # else, so a hook that starts calling an unlisted tool fails here first.
@@ -66,6 +70,25 @@ printf -- '---\n---\n' >"$SB/a b/plän/ü.md"
 ln -s "$SB/other" "$PLANS/link"
 ln -s "$SB/other/x.md" "$PLANS/linked.md"
 ln -s "$PLANS" "$SB/plans-link"
+
+# A split plan: the hub, a part, a part split one folder deeper, and what is
+# no part of it. Its symbolic links lead outside or stand in for the hub.
+HUBD=$PLANS/2026-11-26-mimir HUB=$PLANS/2026-11-26-mimir/2026-11-26-mimir.md
+DEEP="$HUBD/2026-11-26-mimir – 5. Deep"
+mkdir -p "$DEEP" "$SB/other/2026-11-27-away" "$PLANS/2026-11-28-lh" "$PLANS/2026-11-29-nohub"
+printf -- '---\ntype: plan\nprogress: 40\n---\n' >"$HUB"
+printf -- '---\ntype: plan-part\n---\n' >"$HUBD/2026-11-26-mimir – Task 18 galdr.md"
+printf -- '---\ntype: plan-part\n---\n' >"$DEEP/2026-11-26-mimir – 5. Deep.md"
+printf -- '---\ntype: plan-part\n---\n' >"$DEEP/2026-11-26-mimir – 5. Deep – 5.1 Leaf.md"
+printf -- '---\n---\n' >"$HUBD/other.md"
+printf -- '---\n---\n' >"$DEEP/other.md"
+printf -- '---\n---\n' >"$PLANS/2026-11-29-nohub/2026-11-29-nohub – a.md"
+printf -- '---\n---\n' >"$SB/other/2026-11-27-away/2026-11-27-away.md"
+printf -- '---\n---\n' >"$SB/other/2026-11-27-away/2026-11-27-away – a.md"
+printf -- '---\n---\n' >"$PLANS/2026-11-28-lh/2026-11-28-lh – a.md"
+ln -s "$SB/other/x.md" "$HUBD/2026-11-26-mimir – linked.md"
+ln -s "$SB/other/2026-11-27-away" "$PLANS/2026-11-27-away"
+ln -s "$SB/other/x.md" "$PLANS/2026-11-28-lh/2026-11-28-lh.md"
 
 STATE=$SB/state/galdr/plan
 SID=c0ffee00-1234-4abc-8def-000000000001
@@ -129,6 +152,46 @@ for c in "outside plans.dir:$SB/other/x.md" \
     "a file that does not exist:$PLANS/gone.md" \
     "a trailing slash on the file:$PLANS/2026-11-22-galdr.md/" \
     "a relative path:vault/plans/2026-11-22-galdr.md"; do
+    reset
+    run -- "$(edit "$SID" "${c#*:}")"
+    check "ignores ${c%%:*}" 'silent && nothing'
+done
+
+# --- a split plan ----------------------------------------------------------
+
+reset
+run -- "$(edit "$SID" "$HUB")"
+check "hub_in_subdir_recorded: the hub <slug>/<slug>.md records itself" 'silent && recorded "$HUB"'
+
+for c in "a part:$HUBD/2026-11-26-mimir – Task 18 galdr.md" \
+    "a part one folder deeper:$DEEP/2026-11-26-mimir – 5. Deep – 5.1 Leaf.md" \
+    "the deeper folder's own hub:$DEEP/2026-11-26-mimir – 5. Deep.md" \
+    "a part reached through ..:$DEEP/../2026-11-26-mimir – Task 18 galdr.md"; do
+    reset
+    run -- "$(edit "$SID" "${c#*:}")"
+    check "part_records_hub: ${c%%:*} records the hub" 'silent && recorded "$HUB"'
+done
+
+reset
+run -- "$(edit "$SID" "$HUB")"
+run -- "$(edit "$SID" "$HUBD/other.md")"
+check "a later edit of a note in the hub's folder that is no part keeps the hub" \
+    'silent && recorded "$HUB"'
+
+for c in "a linked part:$HUBD/2026-11-26-mimir – linked.md" \
+    "a hub folder that links outside:$PLANS/2026-11-27-away/2026-11-27-away.md" \
+    "a part in a hub folder that links outside:$PLANS/2026-11-27-away/2026-11-27-away – a.md" \
+    "a part whose hub is a link:$PLANS/2026-11-28-lh/2026-11-28-lh – a.md" \
+    "a hub that is a link:$PLANS/2026-11-28-lh/2026-11-28-lh.md"; do
+    reset
+    run -- "$(edit "$SID" "${c#*:}")"
+    check "symlink_still_refused: ${c%%:*}" 'silent && nothing'
+done
+
+for c in "a note in the hub's folder that is no part:$HUBD/other.md" \
+    "a note in the deeper folder that is no part:$DEEP/other.md" \
+    "a part without its hub:$PLANS/2026-11-29-nohub/2026-11-29-nohub – a.md" \
+    "a folder named like a hub, outside plans.dir:$SB/other/2026-11-27-away/2026-11-27-away.md"; do
     reset
     run -- "$(edit "$SID" "${c#*:}")"
     check "ignores ${c%%:*}" 'silent && nothing'

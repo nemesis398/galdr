@@ -6,6 +6,8 @@
 - `lead` 0.1.1: the build agent has the Skill tool, so it can load `simplify-changes`.
 - `galdr` 0.3.0: the status line prints two lines, the budget first and then place and work: the project with the directory below it, the branch (`wt` in a linked worktree), the plan the session edits with its progress, whether the SSH masters of the configured hosts still hold, and warnings for missing required variables, other sessions in the same checkout and a full `/tmp`. The session id shows only next to `bg`. Two new hooks feed it: `plan-track` (PostToolUse on Edit and Write in `plans.dir`) and `ssh-sockets` (SessionStart, `ssh -G` once per host). New config keys: `plans.dir`, `statusline.sshHosts`, `statusline.requiredEnv`, `statusline.requiredEnvHint` and `statusline.tmp`. Without `/proc`, as on macOS, the `bg` tag, the variable check and the session scan stay off.
 
+- `galdr`: `plan-track` knows split plans. Besides a `*.md` directly in `plans.dir`, it records a hub `<slug>/<slug>.md`, and an edit of a part `<slug>/<slug> – <section>.md`, also one folder deeper, records that part's hub, so the status line shows the hub and its progress. Symbolic links stay refused, the hub's included.
+
 ## 0.1.1 - 2026-11-22
 
 - `galdr`: the session preflight and both worktree teardowns kill what is left of `timeout`'s process group themselves, because uutils `timeout` (Ubuntu 26.04) sends its SIGKILL to the child alone.
