@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-11-26
 
-- `galdr`: the status line leads line 1 with the host tag, before the model, on every machine, and line 2 no longer carries it. The tag still prints when stdin is empty or garbage or jq is missing. The config key `statusline.quietHosts` is retired: the script does not read it, and a config that still has it is ignored.
+- `galdr` 0.5.0: the status line leads line 1 with the host tag, before the model, on every machine, and line 2 no longer carries it. The tag still prints when stdin is empty or garbage or jq is missing. The config key `statusline.quietHosts` is retired: the script does not read it, and a config that still has it is ignored.
 
 ## 0.4.0 - 2026-11-26
 
